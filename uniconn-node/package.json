@@ -13,17 +13,28 @@
     "url": "git@github.com:snowmerak/uniconn.git",
     "directory": "uniconn-node"
   },
-  "keywords": ["connection", "tcp", "websocket", "quic", "webtransport", "kcp"],
+  "keywords": [
+    "connection",
+    "tcp",
+    "websocket",
+    "quic",
+    "webtransport",
+    "kcp"
+  ],
   "author": "snowmerak",
   "license": "MIT",
   "type": "module",
   "devDependencies": {
-    "typescript": "^5.7.0",
     "@types/node": "^22.0.0",
-    "@types/ws": "^8.5.0"
+    "@types/ws": "^8.5.0",
+    "typescript": "^5.7.0"
   },
   "dependencies": {
-    "ws": "^8.18.0",
-    "kcpjs": "^1.0.0"
+    "@noble/hashes": "^2.0.1",
+    "@noble/post-quantum": "^0.5.4",
+    "@stablelib/xchacha20poly1305": "^2.0.1",
+    "kcpjs": "^1.0.0",
+    "mlkem": "^2.7.0",
+    "ws": "^8.18.0"
   }
 }

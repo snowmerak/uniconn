@@ -1,0 +1,29 @@
+{
+  "name": "uniconn",
+  "version": "0.1.0",
+  "description": "Universal connection interface for Node.js — TCP, WebSocket, QUIC, WebTransport, KCP",
+  "main": "dist/index.js",
+  "types": "dist/index.d.ts",
+  "scripts": {
+    "build": "tsc",
+    "test": "node --test dist/**/*.test.js"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git@github.com:snowmerak/uniconn.git",
+    "directory": "uniconn-node"
+  },
+  "keywords": ["connection", "tcp", "websocket", "quic", "webtransport", "kcp"],
+  "author": "snowmerak",
+  "license": "MIT",
+  "type": "module",
+  "devDependencies": {
+    "typescript": "^5.7.0",
+    "@types/node": "^22.0.0",
+    "@types/ws": "^8.5.0"
+  },
+  "dependencies": {
+    "ws": "^8.18.0",
+    "kcpjs": "^1.0.0"
+  }
+}

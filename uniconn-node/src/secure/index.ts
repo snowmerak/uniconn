@@ -1,14 +1,10 @@
 /**
- * USCP v1 — uniconn Secure Channel Protocol (Node.js implementation)
+ * USCP v1 — uniconn Secure Channel Protocol
  *
- * E2EE using post-quantum cryptography:
- *   - ML-DSA-87 for identity/signing
- *   - ML-KEM-1024 for ephemeral key exchange
- *   - BLAKE3 for fingerprints and KDF
- *   - XChaCha20-Poly1305 for payload encryption
+ * Platform-agnostic exports (work in both Node.js and browsers):
  */
-
-export { Identity, Fingerprint, computeFingerprint } from "./identity.js";
+export type { IIdentity, Fingerprint, VerifyFn } from "./identity.js";
+export { computeFingerprint } from "./identity.js";
 export { SecureConn } from "./conn.js";
 export { handshakeInitiator, handshakeResponder } from "./handshake.js";
 export {
@@ -22,3 +18,13 @@ export {
   MSG_DATA,
   MSG_ERROR,
 } from "./constants.js";
+
+/**
+ * Node.js-specific exports:
+ */
+export { NodeIdentity, nodeVerify } from "./identity.node.js";
+
+/**
+ * Browser-specific exports:
+ */
+export { BrowserIdentity, browserVerify } from "./identity.browser.js";

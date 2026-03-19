@@ -3,7 +3,13 @@ import * as assert from "node:assert/strict";
 import * as net from "node:net";
 
 import { TcpConn } from "../tcp/conn.js";
-import { Identity, handshakeInitiator, handshakeResponder, SecureConn } from "../secure/index.js";
+import {
+  NodeIdentity,
+  nodeVerify,
+  handshakeInitiator,
+  handshakeResponder,
+  SecureConn,
+} from "../secure/index.js";
 
 /**
  * USCP v1 E2EE integration test.
@@ -13,24 +19,21 @@ import { Identity, handshakeInitiator, handshakeResponder, SecureConn } from "..
  */
 describe("USCP E2EE (Node ↔ Node)", () => {
   test("handshake + short echo", async () => {
-    const alice = Identity.generate();
-    const bob = Identity.generate();
+    const alice = NodeIdentity.generate();
+    const bob = NodeIdentity.generate();
     const aliceFP = alice.fingerprint();
     const bobFP = bob.fingerprint();
 
-    // Create TCP server for Bob.
     const server = net.createServer();
     await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
     const addr = server.address() as net.AddressInfo;
 
-    // Bob accepts and handshakes.
     const bobConnPromise = new Promise<SecureConn>(
       (resolve, reject) => {
         server.once("connection", async (socket) => {
           try {
-            const innerConn = new TcpConn(socket);
-            const secureConn = await handshakeResponder(innerConn, bob, aliceFP);
-            resolve(secureConn);
+            const sc = await handshakeResponder(new TcpConn(socket), bob, aliceFP, nodeVerify);
+            resolve(sc);
           } catch (e) {
             reject(e);
           }
@@ -38,11 +41,9 @@ describe("USCP E2EE (Node ↔ Node)", () => {
       },
     );
 
-    // Alice connects and handshakes.
     const aliceSocket = net.createConnection(addr.port, "127.0.0.1");
     await new Promise<void>((resolve) => aliceSocket.once("connect", resolve));
-    const aliceInner = new TcpConn(aliceSocket);
-    const aliceConn = await handshakeInitiator(aliceInner, alice, bobFP);
+    const aliceConn = await handshakeInitiator(new TcpConn(aliceSocket), alice, bobFP, nodeVerify);
     const bobConn = await bobConnPromise;
 
     // Alice → Bob.
@@ -65,9 +66,9 @@ describe("USCP E2EE (Node ↔ Node)", () => {
   });
 
   test("fingerprint mismatch rejection", async () => {
-    const alice = Identity.generate();
-    const bob = Identity.generate();
-    const eve = Identity.generate();
+    const alice = NodeIdentity.generate();
+    const bob = NodeIdentity.generate();
+    const eve = NodeIdentity.generate();
     const aliceFP = alice.fingerprint();
     const eveFP = eve.fingerprint(); // wrong!
 
@@ -76,9 +77,8 @@ describe("USCP E2EE (Node ↔ Node)", () => {
     const addr = server.address() as net.AddressInfo;
 
     server.once("connection", async (socket) => {
-      const innerConn = new TcpConn(socket);
       try {
-        await handshakeResponder(innerConn, bob, aliceFP);
+        await handshakeResponder(new TcpConn(socket), bob, aliceFP, nodeVerify);
       } catch {
         // expected
       }
@@ -86,11 +86,9 @@ describe("USCP E2EE (Node ↔ Node)", () => {
 
     const aliceSocket = net.createConnection(addr.port, "127.0.0.1");
     await new Promise<void>((resolve) => aliceSocket.once("connect", resolve));
-    const aliceInner = new TcpConn(aliceSocket);
 
-    // Alice expects Eve's fingerprint but gets Bob's → should fail.
     await assert.rejects(
-      () => handshakeInitiator(aliceInner, alice, eveFP),
+      () => handshakeInitiator(new TcpConn(aliceSocket), alice, eveFP, nodeVerify),
       { message: /fingerprint mismatch/ },
     );
 
@@ -98,8 +96,8 @@ describe("USCP E2EE (Node ↔ Node)", () => {
   });
 
   test("large 64KB payload", async () => {
-    const alice = Identity.generate();
-    const bob = Identity.generate();
+    const alice = NodeIdentity.generate();
+    const bob = NodeIdentity.generate();
     const aliceFP = alice.fingerprint();
     const bobFP = bob.fingerprint();
 
@@ -111,12 +109,8 @@ describe("USCP E2EE (Node ↔ Node)", () => {
       (resolve, reject) => {
         server.once("connection", async (socket) => {
           try {
-            const secureConn = await handshakeResponder(
-              new TcpConn(socket),
-              bob,
-              aliceFP,
-            );
-            resolve(secureConn);
+            const sc = await handshakeResponder(new TcpConn(socket), bob, aliceFP, nodeVerify);
+            resolve(sc);
           } catch (e) {
             reject(e);
           }
@@ -126,7 +120,7 @@ describe("USCP E2EE (Node ↔ Node)", () => {
 
     const aliceSocket = net.createConnection(addr.port, "127.0.0.1");
     await new Promise<void>((resolve) => aliceSocket.once("connect", resolve));
-    const aliceConn = await handshakeInitiator(new TcpConn(aliceSocket), alice, bobFP);
+    const aliceConn = await handshakeInitiator(new TcpConn(aliceSocket), alice, bobFP, nodeVerify);
     const bobConn = await bobConnPromise;
 
     // 64KB payload.

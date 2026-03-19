@@ -1,0 +1,5 @@
+﻿??USCP E2EE (Node ??Node)
+  ??handshake + short echo (38.3117ms)
+  ??fingerprint mismatch rejection (9.5768ms)
+  ??large 64KB payload (20.1035ms)
+??USCP E2EE (Node ??Node) (68.7933ms)

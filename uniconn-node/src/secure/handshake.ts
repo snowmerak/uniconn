@@ -3,11 +3,10 @@ import { blake3 } from "@noble/hashes/blake3.js";
 
 import type { IConn } from "../conn.js";
 import {
-  Identity,
   computeFingerprint,
-  verifyWithKey,
-  importRawPublicKey,
   type Fingerprint,
+  type IIdentity,
+  type VerifyFn,
 } from "./identity.js";
 import {
   MSG_HELLO,
@@ -45,11 +44,17 @@ const kem = new MlKem1024();
 
 /**
  * Perform the initiator side of the USCP handshake.
+ *
+ * @param conn  - Transport connection (TCP, WebSocket, WebTransport, etc.)
+ * @param id    - Local identity (NodeIdentity or BrowserIdentity)
+ * @param peerFP - Expected 64-byte fingerprint of the peer
+ * @param verify - Platform-specific verify function (nodeVerify or browserVerify)
  */
 export async function handshakeInitiator(
   conn: IConn,
-  id: Identity,
+  id: IIdentity,
   peerFP: Fingerprint,
+  verify: VerifyFn,
 ): Promise<SecureConn> {
   // 1. Ephemeral ML-KEM-1024.
   const [ek, dk] = await kem.generateKeyPair();
@@ -80,8 +85,7 @@ export async function handshakeInitiator(
   if (!equalBytes(gotFP, peerFP)) {
     throw new Error("fingerprint mismatch");
   }
-  const peerPubKeyObj = importRawPublicKey(reply.publicKey);
-  if (!verifyWithKey(reply.signature, reply.payload, peerPubKeyObj)) {
+  if (!verify(reply.signature, reply.payload, reply.publicKey)) {
     throw new Error("signature verification failed");
   }
 
@@ -95,11 +99,17 @@ export async function handshakeInitiator(
 
 /**
  * Perform the responder side of the USCP handshake.
+ *
+ * @param conn   - Transport connection
+ * @param id     - Local identity
+ * @param peerFP - Expected peer fingerprint
+ * @param verify - Platform-specific verify function
  */
 export async function handshakeResponder(
   conn: IConn,
-  id: Identity,
+  id: IIdentity,
   peerFP: Fingerprint,
+  verify: VerifyFn,
 ): Promise<SecureConn> {
   // 1. Receive HELLO.
   const helloBody = await readFrame(conn);
@@ -115,8 +125,7 @@ export async function handshakeResponder(
   if (!equalBytes(gotFP, peerFP)) {
     throw new Error("fingerprint mismatch");
   }
-  const peerPubKeyObj = importRawPublicKey(hello.publicKey);
-  if (!verifyWithKey(hello.signature, hello.payload, peerPubKeyObj)) {
+  if (!verify(hello.signature, hello.payload, hello.publicKey)) {
     throw new Error("signature verification failed");
   }
 

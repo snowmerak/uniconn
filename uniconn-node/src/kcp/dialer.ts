@@ -1,15 +1,21 @@
-import * as dgram from "node:dgram";
 import type { IConn, IDialer, DialOptions } from "../conn.js";
 import { KcpConn } from "./conn.js";
 
+import { DialWithOptions } from "kcpjs";
+
 /** Configuration for KCP dialing. */
 export interface DialConfig {
-  /** Local address to bind to. */
-  localAddr?: string;
+  /** Conversation ID. Defaults to 1. */
+  conv?: number;
+  /** Data shards for FEC. 0 = no FEC. */
+  dataShards?: number;
+  /** Parity shards for FEC. 0 = no FEC. */
+  parityShards?: number;
 }
 
 /**
- * KcpDialer implements IDialer for KCP connections over UDP.
+ * KcpDialer implements IDialer for KCP connections.
+ * Uses the kcpjs library which is wire-compatible with Go's kcp-go.
  */
 export class KcpDialer implements IDialer {
   private config: DialConfig;
@@ -18,57 +24,19 @@ export class KcpDialer implements IDialer {
     this.config = config ?? {};
   }
 
-  async dial(address: string, options?: DialOptions): Promise<IConn> {
+  async dial(address: string, _options?: DialOptions): Promise<IConn> {
     const [host, portStr] = splitHostPort(address);
     const port = parseInt(portStr, 10);
 
-    return new Promise<IConn>((resolve, reject) => {
-      let timer: ReturnType<typeof setTimeout> | undefined;
-      const cleanup = () => {
-        if (timer) clearTimeout(timer);
-        options?.signal?.removeEventListener("abort", onAbort);
-      };
-
-      const onAbort = () => {
-        cleanup();
-        socket.close();
-        reject(new Error("dial aborted"));
-      };
-
-      if (options?.timeout) {
-        timer = setTimeout(() => {
-          socket.close();
-          reject(new Error("dial timed out"));
-        }, options.timeout);
-      }
-
-      if (options?.signal) {
-        if (options.signal.aborted) {
-          reject(new Error("dial aborted"));
-          return;
-        }
-        options.signal.addEventListener("abort", onAbort, { once: true });
-      }
-
-      const socket = dgram.createSocket("udp4");
-
-      const bindPort = 0;
-      const bindHost = this.config.localAddr
-        ? splitHostPort(this.config.localAddr)[0]
-        : "0.0.0.0";
-
-      socket.bind(bindPort, bindHost, () => {
-        socket.connect(port, host, () => {
-          cleanup();
-          resolve(new KcpConn(socket, host, port));
-        });
-      });
-
-      socket.on("error", (err) => {
-        cleanup();
-        reject(err);
-      });
+    const session = DialWithOptions({
+      conv: this.config.conv ?? 1,
+      port,
+      host,
+      dataShards: this.config.dataShards ?? 0,
+      parityShards: this.config.parityShards ?? 0,
     });
+
+    return new KcpConn(session);
   }
 }
 

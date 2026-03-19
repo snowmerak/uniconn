@@ -1,19 +1,17 @@
-import * as dgram from "node:dgram";
 import type { Addr, IConn } from "../conn.js";
 import { ConnectionClosedError, TimeoutError } from "../errors.js";
 
+// Import kcpjs — a kcp-go compatible KCP implementation for Node.js
+import { DialWithOptions, type UDPSession } from "kcpjs";
+
 /**
- * KcpConn wraps a KCP session over UDP into an IConn.
+ * KcpConn wraps a kcpjs UDPSession (real KCP protocol) into IConn.
  *
- * NOTE: KCP (kcpjs) support is provided as a best-effort adapter.
- * The kcpjs library handles the KCP protocol logic over a UDP socket.
- * This is a simplified implementation — for production use, consider
- * a more mature KCP binding.
+ * This uses the kcpjs library which is wire-compatible with Go's kcp-go,
+ * providing reliable UDP transport with the KCP ARQ protocol.
  */
 export class KcpConn implements IConn {
-  private socket: dgram.Socket;
-  private remoteHost: string;
-  private remotePort: number;
+  private session: UDPSession;
   private closed = false;
   private readDeadlineMs = 0;
   private writeDeadlineMs = 0;
@@ -23,29 +21,27 @@ export class KcpConn implements IConn {
   private readBuffer: Uint8Array | null = null;
   private eofReached = false;
 
-  constructor(socket: dgram.Socket, remoteHost: string, remotePort: number) {
-    this.socket = socket;
-    this.remoteHost = remoteHost;
-    this.remotePort = remotePort;
+  constructor(session: UDPSession) {
+    this.session = session;
 
-    this.socket.on("message", (msg: Buffer) => {
+    this.session.on("recv", (buf: Buffer) => {
       if (this.readResolve && this.readBuffer) {
-        const n = Math.min(msg.length, this.readBuffer.length);
-        msg.copy(this.readBuffer as Buffer, 0, 0, n);
+        const n = Math.min(buf.length, this.readBuffer.length);
+        buf.copy(this.readBuffer as Buffer, 0, 0, n);
         const resolve = this.readResolve;
         this.readResolve = null;
         this.readReject = null;
         this.readBuffer = null;
-        if (n < msg.length) {
-          this.pendingData.push(msg.subarray(n));
+        if (n < buf.length) {
+          this.pendingData.push(buf.subarray(n));
         }
         resolve(n);
       } else {
-        this.pendingData.push(msg);
+        this.pendingData.push(Buffer.from(buf));
       }
     });
 
-    this.socket.on("close", () => {
+    this.session.on("close", () => {
       this.eofReached = true;
       if (this.readResolve) {
         const resolve = this.readResolve;
@@ -53,16 +49,6 @@ export class KcpConn implements IConn {
         this.readReject = null;
         this.readBuffer = null;
         resolve(0);
-      }
-    });
-
-    this.socket.on("error", (err) => {
-      if (this.readReject) {
-        const reject = this.readReject;
-        this.readResolve = null;
-        this.readReject = null;
-        this.readBuffer = null;
-        reject(err);
       }
     });
   }
@@ -107,43 +93,32 @@ export class KcpConn implements IConn {
 
   async write(data: Uint8Array): Promise<number> {
     if (this.closed) throw new ConnectionClosedError();
-
-    return new Promise<number>((resolve, reject) => {
-      let timer: ReturnType<typeof setTimeout> | undefined;
-      if (this.writeDeadlineMs > 0) {
-        timer = setTimeout(() => {
-          reject(new TimeoutError("write"));
-        }, this.writeDeadlineMs);
-      }
-
-      this.socket.send(data, this.remotePort, this.remoteHost, (err) => {
-        if (timer) clearTimeout(timer);
-        if (err) reject(err);
-        else resolve(data.length);
-      });
-    });
+    // kcpjs write is synchronous, returns number of bytes
+    const n = this.session.write(Buffer.from(data));
+    return n;
   }
 
   async close(): Promise<void> {
     if (this.closed) return;
     this.closed = true;
-    return new Promise((resolve) => {
-      this.socket.close(() => resolve());
-    });
+    this.session.removeAllListeners();
+    this.session.close();
+    // Null out the kcp instance so kcpjs's recursive check() timer
+    // hits its guard `if (!this.kcp) return` and stops.
+    (this.session as any).kcp = undefined;
   }
 
   localAddr(): Addr {
-    const a = this.socket.address() as { address: string; port: number };
     return {
       network: "kcp",
-      address: `${a.address}:${a.port}`,
+      address: "0.0.0.0:0",
     };
   }
 
   remoteAddr(): Addr {
     return {
       network: "kcp",
-      address: `${this.remoteHost}:${this.remotePort}`,
+      address: `${this.session.host}:${this.session.port}`,
     };
   }
 

@@ -1,23 +1,23 @@
-import * as dgram from "node:dgram";
 import type { Addr, IConn, IListener } from "../conn.js";
 import { ListenerClosedError } from "../errors.js";
 import { KcpConn } from "./conn.js";
 
+import { ListenWithOptions, type Listener as KcpListener_, type UDPSession } from "kcpjs";
+
 /** Configuration for a KCP listener. */
 export interface ListenConfig {
-  // Reserved for future KCP-specific options (FEC, encryption, etc.)
+  /** Data shards for FEC. 0 = no FEC. */
+  dataShards?: number;
+  /** Parity shards for FEC. 0 = no FEC. */
+  parityShards?: number;
 }
 
 /**
- * KcpListener implements IListener for KCP connections over UDP.
- *
- * In KCP, there is no explicit "accept" mechanism like TCP.
- * This listener creates a new KcpConn for each unique remote address
- * that sends data to the bound UDP port.
+ * KcpListener implements IListener for KCP connections.
+ * Uses the kcpjs library which is wire-compatible with Go's kcp-go.
  */
 export class KcpListener implements IListener {
-  private socket: dgram.Socket;
-  private connMap = new Map<string, KcpConn>();
+  private inner: KcpListener_;
   private connQueue: IConn[] = [];
   private waiters: Array<{
     resolve: (conn: IConn) => void;
@@ -26,55 +26,37 @@ export class KcpListener implements IListener {
   private closed = false;
   private listenAddr: Addr;
 
-  private constructor(socket: dgram.Socket, addr: Addr) {
-    this.socket = socket;
+  private constructor(inner: KcpListener_, addr: Addr) {
+    this.inner = inner;
     this.listenAddr = addr;
-
-    this.socket.on("message", (msg: Buffer, rinfo: dgram.RemoteInfo) => {
-      const key = `${rinfo.address}:${rinfo.port}`;
-
-      if (!this.connMap.has(key)) {
-        // Create a new "connected" UDP socket for this remote peer
-        const peerSocket = dgram.createSocket("udp4");
-        peerSocket.bind(0, () => {
-          peerSocket.connect(rinfo.port, rinfo.address);
-        });
-
-        const conn = new KcpConn(peerSocket, rinfo.address, rinfo.port);
-        this.connMap.set(key, conn);
-
-        // Deliver initial data
-        // Since the peerSocket won't receive the first message (it was on the listener socket),
-        // we manually inject it
-        conn.read(new Uint8Array(0)); // no-op to ensure listeners are set up
-
-        if (this.waiters.length > 0) {
-          const waiter = this.waiters.shift()!;
-          waiter.resolve(conn);
-        } else {
-          this.connQueue.push(conn);
-        }
-      }
-    });
   }
 
   /**
-   * Create a KCP listener on the given port and optional host.
+   * Create a KCP listener on the given port.
    */
-  static listen(port: number, host?: string, _config?: ListenConfig): Promise<KcpListener> {
-    return new Promise((resolve, reject) => {
-      const socket = dgram.createSocket("udp4");
-      socket.on("error", reject);
-      socket.bind(port, host ?? "0.0.0.0", () => {
-        socket.removeListener("error", reject);
-        const a = socket.address() as { address: string; port: number };
-        const addr: Addr = {
-          network: "kcp",
-          address: `${a.address}:${a.port}`,
-        };
-        resolve(new KcpListener(socket, addr));
-      });
+  static listen(port: number, config?: ListenConfig): KcpListener {
+    const cfg = config ?? {};
+    let listener: KcpListener;
+    const inner = ListenWithOptions({
+      port,
+      dataShards: cfg.dataShards ?? 0,
+      parityShards: cfg.parityShards ?? 0,
+      callback: (session: UDPSession) => {
+        const conn = new KcpConn(session);
+        if (listener.waiters.length > 0) {
+          const waiter = listener.waiters.shift()!;
+          waiter.resolve(conn);
+        } else {
+          listener.connQueue.push(conn);
+        }
+      },
     });
+    const addr: Addr = {
+      network: "kcp",
+      address: `0.0.0.0:${port}`,
+    };
+    listener = new KcpListener(inner, addr);
+    return listener;
   }
 
   async accept(): Promise<IConn> {
@@ -96,14 +78,7 @@ export class KcpListener implements IListener {
       w.reject(new ListenerClosedError());
     }
     this.waiters = [];
-    // Close all peer connections
-    for (const conn of this.connMap.values()) {
-      await conn.close();
-    }
-    this.connMap.clear();
-    return new Promise((resolve) => {
-      this.socket.close(() => resolve());
-    });
+    this.inner.close();
   }
 
   addr(): Addr {

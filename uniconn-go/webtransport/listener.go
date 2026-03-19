@@ -19,11 +19,11 @@ type ListenConfig struct {
 	TLSConfig *tls.Config
 
 	// CertFile is the path to the TLS certificate file.
-	// Used by ListenAndServeTLS.
+	// Used by ListenAndServeTLS when no PacketConn is provided.
 	CertFile string
 
 	// KeyFile is the path to the TLS key file.
-	// Used by ListenAndServeTLS.
+	// Used by ListenAndServeTLS when no PacketConn is provided.
 	KeyFile string
 
 	// Path is the HTTP path for WebTransport upgrades.
@@ -34,6 +34,7 @@ type ListenConfig struct {
 // listener implements uniconn.Listener for WebTransport.
 type listener struct {
 	server    *wt.Server
+	pconn     net.PacketConn // owned when we bind manually
 	connCh    chan net.Conn
 	errCh     chan error
 	closeOnce sync.Once
@@ -42,7 +43,7 @@ type listener struct {
 }
 
 // Listen creates a WebTransport listener on the given address.
-// TLSConfig, CertFile, and KeyFile are required.
+// TLSConfig is required.
 func Listen(address string, config *ListenConfig) (uniconn.Listener, error) {
 	if config == nil {
 		config = &ListenConfig{}
@@ -65,10 +66,35 @@ func Listen(address string, config *ListenConfig) (uniconn.Listener, error) {
 		done:   make(chan struct{}),
 	}
 
-	h3Server := &http3.Server{
-		Addr:      address,
-		TLSConfig: config.TLSConfig,
+	// Manually bind a UDP socket so we know the actual port (supports :0).
+	pconn, err := net.ListenPacket("udp", address)
+	if err != nil {
+		return nil, fmt.Errorf("webtransport: listen udp: %w", err)
 	}
+	l.pconn = pconn
+	l.addr = pconn.LocalAddr()
+
+	// Ensure h3 ALPN is present for HTTP/3 negotiation
+	tlsCfg := config.TLSConfig.Clone()
+	hasH3 := false
+	for _, p := range tlsCfg.NextProtos {
+		if p == "h3" {
+			hasH3 = true
+			break
+		}
+	}
+	if !hasH3 {
+		tlsCfg.NextProtos = append(tlsCfg.NextProtos, "h3")
+	}
+
+	h3Server := &http3.Server{
+		Addr:      l.addr.String(),
+		TLSConfig: tlsCfg,
+	}
+
+	// Configure H3 server for WebTransport: sets ENABLE_WEBTRANSPORT
+	// in SETTINGS, enables datagrams, and injects ConnContext.
+	wt.ConfigureHTTP3Server(h3Server)
 
 	wtServer := &wt.Server{
 		H3:          h3Server,
@@ -98,16 +124,8 @@ func Listen(address string, config *ListenConfig) (uniconn.Listener, error) {
 	h3Server.Handler = mux
 	l.server = wtServer
 
-	// Resolve address for Addr()
-	resolvedAddr, err := net.ResolveUDPAddr("udp", address)
-	if err != nil {
-		l.addr = &addr{network: "webtransport", str: address}
-	} else {
-		l.addr = resolvedAddr
-	}
-
 	go func() {
-		if err := wtServer.ListenAndServeTLS(config.CertFile, config.KeyFile); err != nil {
+		if err := wtServer.Serve(pconn); err != nil {
 			select {
 			case l.errCh <- fmt.Errorf("webtransport listener: %w", err):
 			default:
@@ -136,6 +154,9 @@ func (l *listener) Close() error {
 	l.closeOnce.Do(func() {
 		close(l.done)
 		err = l.server.Close()
+		if l.pconn != nil {
+			l.pconn.Close()
+		}
 	})
 	return err
 }

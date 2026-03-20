@@ -15,8 +15,7 @@ import (
 	"lukechampine.com/blake3"
 )
 
-// USCP context string for ML-DSA-87 signing.
-var mldsaCtx = []byte("uscp-v1")
+// ML-DSA-87 context: nil (empty) for cross-platform compat with Node.js node:crypto.
 
 // Fingerprint is a 64-byte BLAKE3 hash of an ML-DSA-87 public key.
 type Fingerprint [FingerprintSize]byte
@@ -58,7 +57,7 @@ func computeFingerprintBytes(pubBytes []byte) Fingerprint {
 // Sign signs the given data with the identity's private key.
 func (id *Identity) Sign(data []byte) ([]byte, error) {
 	sig := make([]byte, mldsa87.SignatureSize)
-	if err := mldsa87.SignTo(id.PrivateKey, data, mldsaCtx, false, sig); err != nil {
+	if err := mldsa87.SignTo(id.PrivateKey, data, nil, false, sig); err != nil {
 		return nil, fmt.Errorf("mldsa87 sign: %w", err)
 	}
 	return sig, nil
@@ -66,5 +65,5 @@ func (id *Identity) Sign(data []byte) ([]byte, error) {
 
 // Verify verifies a signature against a public key and data.
 func Verify(pub *mldsa87.PublicKey, data, sig []byte) bool {
-	return mldsa87.Verify(pub, data, mldsaCtx, sig)
+	return mldsa87.Verify(pub, data, nil, sig)
 }

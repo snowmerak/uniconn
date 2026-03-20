@@ -1,0 +1,418 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <title>USCP v1 Browser E2EE Cross-Test</title>
+  <style>
+    body { font-family: 'Consolas', 'Monaco', monospace; background: #1a1a2e; color: #e0e0ff; padding: 2em; max-width: 800px; margin: 0 auto; }
+    h1 { color: #00ff88; font-size: 1.4em; }
+    #log { white-space: pre-wrap; line-height: 1.6; }
+    .ok { color: #00ff88; }
+    .err { color: #ff4444; }
+    .info { color: #6699ff; }
+    .warn { color: #ffaa00; }
+    button { background: #00ff88; color: #1a1a2e; border: none; padding: 0.6em 1.4em; cursor: pointer; font-size: 1em; border-radius: 4px; margin: 0.5em 0; font-family: inherit; }
+    button:disabled { background: #555; cursor: not-allowed; }
+    input { background: #2d2d44; color: #e0e0ff; border: 1px solid #444; padding: 0.4em; font-family: inherit; width: 100px; }
+  </style>
+</head>
+<body>
+  <h1>🔐 USCP v1 Browser ↔ Go E2EE Cross-Test</h1>
+  <div>
+    <label>WS Port: <input id="port" type="number" value="0"></label>
+    <button id="runBtn" onclick="runTest()">Run Test</button>
+  </div>
+  <pre id="log"></pre>
+
+  <script type="importmap">
+  {
+    "imports": {
+      "@noble/post-quantum/ml-dsa": "https://esm.sh/@noble/post-quantum@0.2.3/esm/ml-dsa.js",
+      "@noble/hashes/blake3": "https://esm.sh/@noble/hashes@1.7.2/esm/blake3.js",
+      "@stablelib/xchacha20poly1305": "https://esm.sh/@stablelib/xchacha20poly1305@2.0.0",
+      "mlkem": "https://esm.sh/mlkem@1.2.0"
+    }
+  }
+  </script>
+
+  <script type="module">
+    // ── Imports ──────────────────────────────────────────
+
+    import { ml_dsa87 } from "@noble/post-quantum/ml-dsa";
+    import { blake3 } from "@noble/hashes/blake3";
+    import { XChaCha20Poly1305 } from "@stablelib/xchacha20poly1305";
+    import { MlKem1024 } from "mlkem";
+
+    const logEl = document.getElementById("log");
+    const portEl = document.getElementById("port");
+    const runBtn = document.getElementById("runBtn");
+
+    function log(msg, cls = "info") {
+      const span = document.createElement("span");
+      span.className = cls;
+      span.textContent = msg + "\n";
+      logEl.appendChild(span);
+      logEl.scrollTop = logEl.scrollHeight;
+    }
+
+    // ── USCP v1 Constants ───────────────────────────────
+
+    const FINGERPRINT_SIZE = 64;
+    const MSG_HELLO = 0x01;
+    const MSG_HELLO_REPLY = 0x02;
+    const MSG_DATA = 0x03;
+    const MSG_ERROR = 0x04;
+    const NONCE_SIZE = 24;
+    const NONCE_PFX_SIZE = 12;
+    const TIMESTAMP_SIZE = 4;
+    const KDF_OUTPUT_SIZE = 88;
+
+    // ── Helpers ─────────────────────────────────────────
+
+    function hexToBytes(hex) {
+      const b = new Uint8Array(hex.length / 2);
+      for (let i = 0; i < hex.length; i += 2) b[i / 2] = parseInt(hex.substring(i, i + 2), 16);
+      return b;
+    }
+    function bytesToHex(b) {
+      return Array.from(b).map(x => x.toString(16).padStart(2, "0")).join("");
+    }
+    function writeU32BE(buf, off, val) {
+      buf[off] = (val >>> 24) & 0xff; buf[off+1] = (val >>> 16) & 0xff;
+      buf[off+2] = (val >>> 8) & 0xff; buf[off+3] = val & 0xff;
+    }
+    function readU32BE(buf, off) { return ((buf[off] << 24) | (buf[off+1] << 16) | (buf[off+2] << 8) | buf[off+3]) >>> 0; }
+    function writeU16BE(buf, off, val) { buf[off] = (val >>> 8) & 0xff; buf[off+1] = val & 0xff; }
+    function readU16BE(buf, off) { return (buf[off] << 8) | buf[off+1]; }
+    function writeU64BE(buf, off, val) { const hi = Number((val >> 32n) & 0xffffffffn); const lo = Number(val & 0xffffffffn); writeU32BE(buf, off, hi); writeU32BE(buf, off+4, lo); }
+    function readU64BE(buf, off) { return (BigInt(readU32BE(buf, off)) << 32n) | BigInt(readU32BE(buf, off + 4)); }
+
+    function computeFingerprint(rawPubKey) {
+      return blake3(rawPubKey, { dkLen: FINGERPRINT_SIZE });
+    }
+
+    function equalBytes(a, b) {
+      if (a.length !== b.length) return false;
+      let d = 0;
+      for (let i = 0; i < a.length; i++) d |= a[i] ^ b[i];
+      return d === 0;
+    }
+
+    // ── WebSocket IConn ─────────────────────────────────
+
+    class WsConn {
+      constructor(ws) {
+        this.ws = ws;
+        this.pending = [];
+        this.readResolve = null;
+        this.readBuffer = null;
+        this.eof = false;
+
+        ws.binaryType = "arraybuffer";
+        ws.addEventListener("message", (ev) => {
+          const data = new Uint8Array(ev.data);
+          if (this.readResolve && this.readBuffer) {
+            const n = Math.min(data.length, this.readBuffer.length);
+            this.readBuffer.set(data.subarray(0, n));
+            const resolve = this.readResolve;
+            this.readResolve = null;
+            this.readBuffer = null;
+            if (n < data.length) this.pending.push(data.subarray(n));
+            resolve(n);
+          } else {
+            this.pending.push(data);
+          }
+        });
+        ws.addEventListener("close", () => {
+          this.eof = true;
+          if (this.readResolve) { this.readResolve(0); this.readResolve = null; }
+        });
+      }
+
+      read(buf) {
+        if (this.pending.length > 0) {
+          const chunk = this.pending[0];
+          const n = Math.min(chunk.length, buf.length);
+          buf.set(chunk.subarray(0, n));
+          if (n < chunk.length) this.pending[0] = chunk.subarray(n);
+          else this.pending.shift();
+          return Promise.resolve(n);
+        }
+        if (this.eof) return Promise.resolve(0);
+        return new Promise((resolve) => { this.readResolve = resolve; this.readBuffer = buf; });
+      }
+
+      write(data) {
+        this.ws.send(data);
+        return Promise.resolve(data.length);
+      }
+
+      close() { this.ws.close(); return Promise.resolve(); }
+    }
+
+    // ── Frame I/O ───────────────────────────────────────
+
+    async function readExact(conn, n) {
+      const result = new Uint8Array(n);
+      let offset = 0;
+      while (offset < n) {
+        const read = await conn.read(result.subarray(offset));
+        if (read === 0) throw new Error("unexpected EOF");
+        offset += read;
+      }
+      return result;
+    }
+
+    async function readFrame(conn) {
+      const lenBuf = await readExact(conn, 4);
+      const len = readU32BE(lenBuf, 0);
+      return readExact(conn, len);
+    }
+
+    async function writeFrame(conn, body) {
+      const frame = new Uint8Array(4 + body.length);
+      writeU32BE(frame, 0, body.length);
+      frame.set(body, 4);
+      await conn.write(frame);
+    }
+
+    // ── Hello marshal/unmarshal ─────────────────────────
+
+    function marshalHello(msg) {
+      const bodyLen = 1 + 2 + msg.publicKey.length + 2 + msg.payload.length + 2 + msg.signature.length;
+      const buf = new Uint8Array(bodyLen);
+      let off = 0;
+      buf[off++] = msg.type;
+      writeU16BE(buf, off, msg.publicKey.length); off += 2;
+      buf.set(msg.publicKey, off); off += msg.publicKey.length;
+      writeU16BE(buf, off, msg.payload.length); off += 2;
+      buf.set(msg.payload, off); off += msg.payload.length;
+      writeU16BE(buf, off, msg.signature.length); off += 2;
+      buf.set(msg.signature, off);
+      return buf;
+    }
+
+    function unmarshalHello(body) {
+      let off = 0;
+      const type = body[off++];
+      const pkLen = readU16BE(body, off); off += 2;
+      const publicKey = body.slice(off, off + pkLen); off += pkLen;
+      const plLen = readU16BE(body, off); off += 2;
+      const payload = body.slice(off, off + plLen); off += plLen;
+      const sigLen = readU16BE(body, off); off += 2;
+      const signature = body.slice(off, off + sigLen);
+      return { type, publicKey, payload, signature };
+    }
+
+    // ── Key derivation ──────────────────────────────────
+
+    function deriveKeys(sharedSecret) {
+      const ctx = new TextEncoder().encode("uscp-v1-kdf");
+      const combined = new Uint8Array(ctx.length + sharedSecret.length);
+      combined.set(ctx); combined.set(sharedSecret, ctx.length);
+      const out = blake3(combined, { dkLen: KDF_OUTPUT_SIZE });
+      return {
+        initiatorKey: out.slice(0, 32),
+        responderKey: out.slice(32, 64),
+        initiatorNoncePfx: out.slice(64, 64 + NONCE_PFX_SIZE),
+        responderNoncePfx: out.slice(64 + NONCE_PFX_SIZE, KDF_OUTPUT_SIZE),
+      };
+    }
+
+    // ── SecureConn ──────────────────────────────────────
+
+    class SecureConn {
+      constructor(inner, keys, isInitiator) {
+        this.inner = inner;
+        this.sendCounter = 0n;
+        this.recvBuf = null;
+        if (isInitiator) {
+          this.sendCipher = new XChaCha20Poly1305(keys.initiatorKey);
+          this.recvCipher = new XChaCha20Poly1305(keys.responderKey);
+          this.sendNoncePfx = keys.initiatorNoncePfx;
+          this.recvNoncePfx = keys.responderNoncePfx;
+        } else {
+          this.sendCipher = new XChaCha20Poly1305(keys.responderKey);
+          this.recvCipher = new XChaCha20Poly1305(keys.initiatorKey);
+          this.sendNoncePfx = keys.responderNoncePfx;
+          this.recvNoncePfx = keys.initiatorNoncePfx;
+        }
+      }
+
+      async write(data) {
+        const counter = this.sendCounter++;
+        const ts = Math.floor(Date.now() / 1000) >>> 0;
+        const nonce = new Uint8Array(NONCE_SIZE);
+        nonce.set(this.sendNoncePfx);
+        writeU32BE(nonce, NONCE_PFX_SIZE, ts);
+        writeU64BE(nonce, NONCE_PFX_SIZE + TIMESTAMP_SIZE, counter);
+        const ct = this.sendCipher.seal(nonce, data);
+        // Marshal DATA frame.
+        const body = new Uint8Array(1 + 4 + 8 + ct.length);
+        body[0] = MSG_DATA;
+        writeU32BE(body, 1, ts);
+        writeU64BE(body, 5, counter);
+        body.set(ct, 13);
+        await writeFrame(this.inner, body);
+        return data.length;
+      }
+
+      async read(buf) {
+        if (this.recvBuf && this.recvBuf.length > 0) {
+          const n = Math.min(buf.length, this.recvBuf.length);
+          buf.set(this.recvBuf.subarray(0, n));
+          this.recvBuf = n < this.recvBuf.length ? this.recvBuf.subarray(n) : null;
+          return n;
+        }
+        const body = await readFrame(this.inner);
+        if (body[0] === MSG_DATA) {
+          const ts = readU32BE(body, 1);
+          const counter = readU64BE(body, 5);
+          const ct = body.subarray(13);
+          const nonce = new Uint8Array(NONCE_SIZE);
+          nonce.set(this.recvNoncePfx);
+          writeU32BE(nonce, NONCE_PFX_SIZE, ts);
+          writeU64BE(nonce, NONCE_PFX_SIZE + TIMESTAMP_SIZE, counter);
+          const pt = this.recvCipher.open(nonce, ct);
+          if (!pt) throw new Error("decrypt failed");
+          const n = Math.min(buf.length, pt.length);
+          buf.set(pt.subarray(0, n));
+          if (n < pt.length) this.recvBuf = pt.subarray(n);
+          return n;
+        }
+        throw new Error("unexpected msg type: " + body[0]);
+      }
+
+      async close() { await this.inner.close(); }
+    }
+
+    // ── Main Test ───────────────────────────────────────
+
+    const kem = new MlKem1024();
+
+    window.runTest = async function() {
+      runBtn.disabled = true;
+      logEl.textContent = "";
+      const wsPort = parseInt(portEl.value);
+      if (!wsPort) { log("Please enter a valid WS port", "err"); runBtn.disabled = false; return; }
+
+      try {
+        // 1. Generate browser identity (ML-DSA-87).
+        log("⏳ Generating ML-DSA-87 identity (this takes ~30-120s in browser)...", "warn");
+        const t0 = performance.now();
+        const { publicKey: pubKey, secretKey: secKey } = ml_dsa87.keygen();
+        const keygenMs = (performance.now() - t0).toFixed(0);
+        log(`✅ Identity generated in ${keygenMs}ms, pubkey len=${pubKey.length}`, "ok");
+
+        const myFP = computeFingerprint(pubKey);
+        log(`   Fingerprint: ${bytesToHex(myFP).slice(0, 32)}...`);
+
+        // 2. Connect WebSocket to Go server.
+        log(`🔌 Connecting to ws://127.0.0.1:${wsPort}/ws ...`);
+        const ws = new WebSocket(`ws://127.0.0.1:${wsPort}/ws`);
+        ws.binaryType = "arraybuffer";
+        await new Promise((resolve, reject) => {
+          ws.onopen = resolve;
+          ws.onerror = () => reject(new Error("WS connect failed"));
+        });
+        log("✅ WebSocket connected", "ok");
+
+        // 3. Exchange fingerprints with Go server.
+        // Send our fingerprint (64 bytes).
+        ws.send(myFP);
+        // Read server fingerprint (64 bytes).
+        const serverFP = await new Promise((resolve) => {
+          ws.onmessage = (ev) => { resolve(new Uint8Array(ev.data)); };
+        });
+        log(`   Server fingerprint: ${bytesToHex(serverFP).slice(0, 32)}...`);
+
+        // 4. Wrap WS as IConn.
+        const conn = new WsConn(ws);
+
+        // 5. USCP handshake (initiator).
+        log("🤝 Starting USCP handshake...");
+        const [ek, dk] = await kem.generateKeyPair();
+        log(`   ML-KEM-1024 ephemeral key generated, ek=${ek.length}B`);
+
+        // Sign ek with ML-DSA-87.
+        const sig = ml_dsa87.sign(ek, secKey);
+        log(`   Signed ek, sig=${sig.length}B`);
+
+        // Send HELLO.
+        const hello = marshalHello({ type: MSG_HELLO, publicKey: pubKey, payload: ek, signature: sig });
+        await writeFrame(conn, hello);
+        log("   → HELLO sent");
+
+        // Receive HELLO_REPLY.
+        const replyBody = await readFrame(conn);
+        const reply = unmarshalHello(replyBody);
+        if (reply.type !== MSG_HELLO_REPLY) throw new Error(`expected HELLO_REPLY, got ${reply.type}`);
+        log("   ← HELLO_REPLY received");
+
+        // Verify peer fingerprint.
+        const gotFP = computeFingerprint(reply.publicKey);
+        if (!equalBytes(gotFP, serverFP)) throw new Error("fingerprint mismatch!");
+        log("   ✅ Peer fingerprint verified", "ok");
+
+        // Verify peer signature.
+        if (!ml_dsa87.verify(reply.signature, reply.payload, reply.publicKey)) {
+          throw new Error("signature verification failed");
+        }
+        log("   ✅ Peer signature verified", "ok");
+
+        // Decapsulate shared secret.
+        const sharedSecret = await kem.decap(reply.payload, dk);
+        log(`   🔑 Shared secret derived, ${sharedSecret.length}B`);
+
+        // Derive session keys.
+        const keys = deriveKeys(sharedSecret);
+        const sc = new SecureConn(conn, keys, true);
+        log("✅ USCP handshake complete!", "ok");
+
+        // 6. Echo test — short message.
+        const testMsg = new TextEncoder().encode("Hello from browser E2EE! 🔐");
+        await sc.write(testMsg);
+        log(`   → Sent ${testMsg.length}B encrypted`);
+
+        const buf = new Uint8Array(1024);
+        const n = await sc.read(buf);
+        const echoMsg = new TextDecoder().decode(buf.subarray(0, n));
+        log(`   ← Received ${n}B: "${echoMsg}"`);
+
+        if (echoMsg === "Hello from browser E2EE! 🔐") {
+          log("✅ Echo verified!", "ok");
+        } else {
+          log("❌ Echo mismatch!", "err");
+        }
+
+        // 7. Larger payload (4KB).
+        const bigData = new Uint8Array(4096);
+        for (let i = 0; i < bigData.length; i++) bigData[i] = i % 256;
+        await sc.write(bigData);
+        log(`   → Sent 4KB encrypted`);
+
+        const received = [];
+        const readBuf = new Uint8Array(2048);
+        while (received.length < bigData.length) {
+          const rn = await sc.read(readBuf);
+          received.push(...readBuf.subarray(0, rn));
+        }
+        const recvArr = new Uint8Array(received);
+        if (equalBytes(recvArr, bigData)) {
+          log("✅ 4KB echo verified!", "ok");
+        } else {
+          log("❌ 4KB echo mismatch!", "err");
+        }
+
+        await sc.close();
+        log("\n🎉 All browser E2EE tests passed!", "ok");
+
+      } catch (e) {
+        log(`❌ ERROR: ${e.message}`, "err");
+        log(e.stack, "err");
+      }
+      runBtn.disabled = false;
+    };
+  </script>
+</body>
+</html>

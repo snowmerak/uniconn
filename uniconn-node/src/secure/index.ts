@@ -1,7 +1,11 @@
 /**
  * USCP v1 — uniconn Secure Channel Protocol
  *
- * Platform-agnostic exports (work in both Node.js and browsers):
+ * Platform-agnostic exports (work in both Node.js and browsers).
+ *
+ * Platform-specific identity modules should be imported directly:
+ *   - Node.js:  import { NodeIdentity, nodeVerify } from "./secure/identity.node.js"
+ *   - Browser:  import { BrowserIdentity, browserVerify } from "./secure/identity.browser.js"
  */
 export type { IIdentity, Fingerprint, VerifyFn } from "./identity.js";
 export { computeFingerprint } from "./identity.js";
@@ -18,13 +22,3 @@ export {
   MSG_DATA,
   MSG_ERROR,
 } from "./constants.js";
-
-/**
- * Node.js-specific exports:
- */
-export { NodeIdentity, nodeVerify } from "./identity.node.js";
-
-/**
- * Browser-specific exports:
- */
-export { BrowserIdentity, browserVerify } from "./identity.browser.js";

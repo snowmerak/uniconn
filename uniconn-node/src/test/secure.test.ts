@@ -3,19 +3,11 @@ import * as assert from "node:assert/strict";
 import * as net from "node:net";
 
 import { TcpConn } from "../tcp/conn.js";
-import {
-  NodeIdentity,
-  nodeVerify,
-  handshakeInitiator,
-  handshakeResponder,
-  SecureConn,
-} from "../secure/index.js";
+import { handshakeInitiator, handshakeResponder, SecureConn } from "../secure/index.js";
+import { NodeIdentity, nodeVerify } from "../secure/identity.node.js";
 
 /**
- * USCP v1 E2EE integration test.
- *
- * Two Node.js peers (Alice & Bob) connect over TCP,
- * perform the USCP handshake, and echo data through the encrypted tunnel.
+ * USCP v1 E2EE integration test (Node ↔ Node over TCP).
  */
 describe("USCP E2EE (Node ↔ Node)", () => {
   test("handshake + short echo", async () => {
@@ -28,18 +20,14 @@ describe("USCP E2EE (Node ↔ Node)", () => {
     await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
     const addr = server.address() as net.AddressInfo;
 
-    const bobConnPromise = new Promise<SecureConn>(
-      (resolve, reject) => {
-        server.once("connection", async (socket) => {
-          try {
-            const sc = await handshakeResponder(new TcpConn(socket), bob, aliceFP, nodeVerify);
-            resolve(sc);
-          } catch (e) {
-            reject(e);
-          }
-        });
-      },
-    );
+    const bobConnPromise = new Promise<SecureConn>((resolve, reject) => {
+      server.once("connection", async (socket) => {
+        try {
+          const sc = await handshakeResponder(new TcpConn(socket), bob, aliceFP, nodeVerify);
+          resolve(sc);
+        } catch (e) { reject(e); }
+      });
+    });
 
     const aliceSocket = net.createConnection(addr.port, "127.0.0.1");
     await new Promise<void>((resolve) => aliceSocket.once("connect", resolve));
@@ -54,7 +42,7 @@ describe("USCP E2EE (Node ↔ Node)", () => {
     const n = await bobConn.read(buf);
     assert.deepStrictEqual(buf.subarray(0, n), testData);
 
-    // Bob → Alice (echo back).
+    // Bob → Alice (echo).
     await bobConn.write(buf.subarray(0, n));
     const buf2 = new Uint8Array(1024);
     const n2 = await aliceConn.read(buf2);
@@ -70,18 +58,14 @@ describe("USCP E2EE (Node ↔ Node)", () => {
     const bob = NodeIdentity.generate();
     const eve = NodeIdentity.generate();
     const aliceFP = alice.fingerprint();
-    const eveFP = eve.fingerprint(); // wrong!
+    const eveFP = eve.fingerprint(); // wrong
 
     const server = net.createServer();
     await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
     const addr = server.address() as net.AddressInfo;
 
     server.once("connection", async (socket) => {
-      try {
-        await handshakeResponder(new TcpConn(socket), bob, aliceFP, nodeVerify);
-      } catch {
-        // expected
-      }
+      try { await handshakeResponder(new TcpConn(socket), bob, aliceFP, nodeVerify); } catch {}
     });
 
     const aliceSocket = net.createConnection(addr.port, "127.0.0.1");
@@ -91,7 +75,6 @@ describe("USCP E2EE (Node ↔ Node)", () => {
       () => handshakeInitiator(new TcpConn(aliceSocket), alice, eveFP, nodeVerify),
       { message: /fingerprint mismatch/ },
     );
-
     server.close();
   });
 
@@ -105,25 +88,20 @@ describe("USCP E2EE (Node ↔ Node)", () => {
     await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
     const addr = server.address() as net.AddressInfo;
 
-    const bobConnPromise = new Promise<SecureConn>(
-      (resolve, reject) => {
-        server.once("connection", async (socket) => {
-          try {
-            const sc = await handshakeResponder(new TcpConn(socket), bob, aliceFP, nodeVerify);
-            resolve(sc);
-          } catch (e) {
-            reject(e);
-          }
-        });
-      },
-    );
+    const bobConnPromise = new Promise<SecureConn>((resolve, reject) => {
+      server.once("connection", async (socket) => {
+        try {
+          const sc = await handshakeResponder(new TcpConn(socket), bob, aliceFP, nodeVerify);
+          resolve(sc);
+        } catch (e) { reject(e); }
+      });
+    });
 
     const aliceSocket = net.createConnection(addr.port, "127.0.0.1");
     await new Promise<void>((resolve) => aliceSocket.once("connect", resolve));
     const aliceConn = await handshakeInitiator(new TcpConn(aliceSocket), alice, bobFP, nodeVerify);
     const bobConn = await bobConnPromise;
 
-    // 64KB payload.
     const data = new Uint8Array(65536);
     for (let i = 0; i < data.length; i++) data[i] = i % 256;
 
@@ -137,7 +115,6 @@ describe("USCP E2EE (Node ↔ Node)", () => {
     }
 
     assert.deepStrictEqual(new Uint8Array(received), data);
-
     await aliceConn.close();
     await bobConn.close();
     server.close();

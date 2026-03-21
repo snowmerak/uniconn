@@ -319,16 +319,25 @@ MSG_ERROR               = 0xFF
 | BLAKE3 | `lukechampine.com/blake3` |
 | XChaCha20-Poly1305 | `golang.org/x/crypto/chacha20poly1305` |
 
-### 10.2. Node.js / 브라우저
+### 10.2. Node.js (≥ 25)
 
 | 기능 | 패키지 |
 |---|---|
-| ML-KEM-1024 | `crystals-kyber` 또는 향후 Web Crypto API |
-| ML-DSA-87 | `pqc-dilithium` 또는 WASM 바인딩 |
-| BLAKE3 | `blake3` (npm) |
+| ML-KEM-1024 | `mlkem` |
+| ML-DSA-87 | `node:crypto` (OpenSSL 내장) |
+| BLAKE3 | `@noble/hashes/blake3` |
 | XChaCha20-Poly1305 | `@stablelib/xchacha20poly1305` |
 
-### 10.3. 기타 언어
+### 10.3. 브라우저
+
+| 기능 | 패키지 |
+|---|---|
+| ML-KEM-1024 | `mlkem` |
+| ML-DSA-87 | `@noble/post-quantum/ml-dsa` (순수 JS) |
+| BLAKE3 | `@noble/hashes/blake3` |
+| XChaCha20-Poly1305 | `@stablelib/xchacha20poly1305` |
+
+### 10.4. 기타 언어
 
 ML-DSA-87 (FIPS 204), ML-KEM-1024 (FIPS 203)를 구현하는
 라이브러리가 있는 언어에서 이 프로토콜을 구현할 수 있습니다.

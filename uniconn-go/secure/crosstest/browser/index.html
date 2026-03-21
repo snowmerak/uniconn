@@ -27,10 +27,10 @@
   <script type="importmap">
   {
     "imports": {
-      "@noble/post-quantum/ml-dsa": "https://esm.sh/@noble/post-quantum@0.2.3/esm/ml-dsa.js",
-      "@noble/hashes/blake3": "https://esm.sh/@noble/hashes@1.7.2/esm/blake3.js",
-      "@stablelib/xchacha20poly1305": "https://esm.sh/@stablelib/xchacha20poly1305@2.0.0",
-      "mlkem": "https://esm.sh/mlkem@1.2.0"
+      "@noble/post-quantum/ml-dsa": "https://esm.sh/@noble/post-quantum/ml-dsa",
+      "@noble/hashes/blake3": "https://esm.sh/@noble/hashes/blake3",
+      "@stablelib/xchacha20poly1305": "https://esm.sh/@stablelib/xchacha20poly1305",
+      "mlkem": "https://esm.sh/mlkem"
     }
   }
   </script>
@@ -207,7 +207,7 @@
     // ── Key derivation ──────────────────────────────────
 
     function deriveKeys(sharedSecret) {
-      const ctx = new TextEncoder().encode("uscp-v1-kdf");
+      const ctx = new TextEncoder().encode("uniconn-e2ee-v1");
       const combined = new Uint8Array(ctx.length + sharedSecret.length);
       combined.set(ctx); combined.set(sharedSecret, ctx.length);
       const out = blake3(combined, { dkLen: KDF_OUTPUT_SIZE });

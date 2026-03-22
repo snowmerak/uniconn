@@ -54,7 +54,7 @@ class WsListener(Listener):
 
 # ── Minimal WebSocket framing for synchronous server ──────
 
-_WS_MAGIC = b"258EAFA5-E914-47DA-95CA-5AB53AB35C11"
+_WS_MAGIC = b"258EAFA5-E914-47DA-95CA-C5AB0DC85B11"
 
 
 def _do_ws_accept_handshake(sock: socket.socket) -> None:

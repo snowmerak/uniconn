@@ -66,7 +66,6 @@ def test_python_node_tcp_echo():
         proc.kill()
 
 
-@pytest.mark.xfail(reason="Python raw WS server handshake not fully compatible with Node ws library")
 def test_python_node_ws_echo():
     """Node WebSocket client → Python WebSocket echo server."""
     proc, port = _spawn_py_server("ws")

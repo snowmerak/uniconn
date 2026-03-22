@@ -59,7 +59,7 @@ class WsDialer(Dialer):
 
         # Verify Sec-WebSocket-Accept.
         expected_accept = base64.b64encode(
-            hashlib.sha1((key + _WS_MAGIC.decode()).encode()).digest()
+            hashlib.sha1((key.strip() + _WS_MAGIC.decode()).encode()).digest()
         ).decode()
 
         accept_found = False
@@ -68,20 +68,10 @@ class WsDialer(Dialer):
                 got = line.split(":", 1)[1].strip()
                 if got == expected_accept:
                     accept_found = True
-                else:
-                    # Some WebSocket servers (e.g. gorilla/websocket) may
-                    # produce different accept values in certain configs.
-                    # Log warning but allow connection to proceed.
-                    import warnings
-                    warnings.warn(
-                        f"Sec-WebSocket-Accept mismatch: got={got}, expected={expected_accept}",
-                        stacklevel=2,
-                    )
-                    accept_found = True  # Allow connection anyway.
                 break
 
         if not accept_found:
-            raise ConnectionError("No Sec-WebSocket-Accept header in response")
+            raise ConnectionError("Sec-WebSocket-Accept mismatch")
 
         # Client-side connection uses masking.
         return _RawWsClientConn(sock)

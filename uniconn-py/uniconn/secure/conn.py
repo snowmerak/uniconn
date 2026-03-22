@@ -1,8 +1,7 @@
-"""SecureConn — XChaCha20-Poly1305 encrypted connection."""
+"""SecureConn — XChaCha20-Poly1305 encrypted connection (synchronous)."""
 
 from __future__ import annotations
 
-import os
 import struct
 import time
 
@@ -17,19 +16,15 @@ from .constants import (
     TIMESTAMP_SIZE,
     COUNTER_SIZE,
 )
-from .message import read_frame, write_frame, marshal_data, marshal_error
+from .message import read_frame_from_conn, write_frame_to_conn, marshal_data, marshal_error
 
 
 class SecureConn(Conn):
     """
-    Encrypted connection wrapping any Conn with XChaCha20-Poly1305.
-
-    Uses per-direction keys and structured nonces for replay protection.
-    Implements the Conn interface for transparent use.
+    Encrypted connection wrapping any Conn with XChaCha20-Poly1305 (synchronous).
     """
 
-    def __init__(self, keys: "SessionKeys", is_initiator: bool) -> None:
-        # Import here to avoid circular import at module level.
+    def __init__(self, keys, is_initiator: bool) -> None:
         if is_initiator:
             self._send_key = keys.initiator_key
             self._recv_key = keys.responder_key
@@ -46,23 +41,20 @@ class SecureConn(Conn):
         self._inner_conn: Conn | None = None
 
     def bind(self, conn: Conn) -> "SecureConn":
-        """Bind to an underlying Conn for I/O. Returns self for chaining."""
+        """Bind to an underlying Conn. Returns self for chaining."""
         self._inner_conn = conn
         return self
 
-    async def read(self, buf: bytearray) -> int:
-        """Read and decrypt data from the underlying connection."""
-        assert self._inner_conn is not None, "SecureConn not bound to a Conn"
+    def read(self, buf: bytearray) -> int:
+        assert self._inner_conn is not None
 
-        # Buffered data first.
         if self._recv_buf:
             n = min(len(buf), len(self._recv_buf))
             buf[:n] = self._recv_buf[:n]
             self._recv_buf = self._recv_buf[n:]
             return n
 
-        # Read next frame.
-        body = await read_frame(self._inner_conn)
+        body = read_frame_from_conn(self._inner_conn)
         if not body:
             raise ConnectionError("empty frame")
 
@@ -81,7 +73,6 @@ class SecureConn(Conn):
             raise ValueError(f"unexpected message type: 0x{msg_type:02x}")
 
     def _handle_data(self, body: bytes, buf: bytearray) -> int:
-        """Decrypt a DATA message."""
         if len(body) < 13:
             raise ValueError("DATA message too short")
 
@@ -89,7 +80,6 @@ class SecureConn(Conn):
         counter = struct.unpack("!Q", body[5:13])[0]
         ciphertext = body[13:]
 
-        # Reconstruct nonce: [12B prefix][4B timestamp][8B counter].
         nonce = bytearray(NONCE_SIZE)
         nonce[:NONCE_PREFIX_SIZE] = self._recv_pfx
         struct.pack_into("!I", nonce, NONCE_PREFIX_SIZE, ts)
@@ -109,19 +99,16 @@ class SecureConn(Conn):
             self._recv_buf.extend(plaintext[n:])
         return n
 
-    async def write(self, data: bytes) -> int:
-        """Encrypt and write data as a DATA frame."""
-        assert self._inner_conn is not None, "SecureConn not bound to a Conn"
+    def write(self, data: bytes) -> int:
+        assert self._inner_conn is not None
 
         if not data:
             return 0
 
         counter = self._send_counter
         self._send_counter += 1
-
         ts = int(time.time()) & 0xFFFFFFFF
 
-        # Build nonce: [12B prefix][4B timestamp][8B counter].
         nonce = bytearray(NONCE_SIZE)
         nonce[:NONCE_PREFIX_SIZE] = self._send_pfx
         struct.pack_into("!I", nonce, NONCE_PREFIX_SIZE, ts)
@@ -132,25 +119,20 @@ class SecureConn(Conn):
         ct_with_tag = ciphertext + tag
 
         frame_body = marshal_data(ts, counter, ct_with_tag)
-        await write_frame(self._inner_conn, frame_body)
+        write_frame_to_conn(self._inner_conn, frame_body)
         return len(data)
 
-    async def close(self) -> None:
-        """Send ERROR(closed) and close inner connection."""
+    def close(self) -> None:
         if self._inner_conn is not None:
             try:
                 err_body = marshal_error("closed")
-                await write_frame(self._inner_conn, err_body)
+                write_frame_to_conn(self._inner_conn, err_body)
             except Exception:
                 pass
-            await self._inner_conn.close()
+            self._inner_conn.close()
 
     def local_addr(self) -> Addr | None:
         return self._inner_conn.local_addr() if self._inner_conn else None
 
     def remote_addr(self) -> Addr | None:
         return self._inner_conn.remote_addr() if self._inner_conn else None
-
-
-# Re-export SessionKeys type hint for handshake module.
-# Actual class is in handshake.py to avoid circular import.

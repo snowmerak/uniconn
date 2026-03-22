@@ -1,8 +1,10 @@
 """
-Core connection interfaces for uniconn.
+Core connection interfaces for uniconn (synchronous).
 
-All protocol adapters implement these interfaces so that application code
-can work with any transport transparently.
+All protocol adapters implement these interfaces so that application
+code can work with any transport transparently.
+
+For async usage, wrap methods with asyncio.to_thread().
 """
 
 from __future__ import annotations
@@ -20,24 +22,23 @@ class Addr:
 
 class Conn(abc.ABC):
     """
-    Universal connection interface, modeled after Go's net.Conn.
+    Universal connection interface (synchronous), modeled after Go's net.Conn.
 
-    Each protocol adapter implements this so that application code can
-    read, write, and close connections identically regardless of transport.
+    For async usage: await asyncio.to_thread(conn.read, buf)
     """
 
     @abc.abstractmethod
-    async def read(self, buf: bytearray) -> int:
+    def read(self, buf: bytearray) -> int:
         """Read data into buffer. Returns number of bytes read. 0 = EOF."""
         ...
 
     @abc.abstractmethod
-    async def write(self, data: bytes) -> int:
+    def write(self, data: bytes) -> int:
         """Write data. Returns number of bytes written."""
         ...
 
     @abc.abstractmethod
-    async def close(self) -> None:
+    def close(self) -> None:
         """Close the connection."""
         ...
 
@@ -53,15 +54,15 @@ class Conn(abc.ABC):
 
 
 class Listener(abc.ABC):
-    """Server-side listener interface."""
+    """Server-side listener interface (synchronous)."""
 
     @abc.abstractmethod
-    async def accept(self) -> Conn:
-        """Accept and return the next incoming connection."""
+    def accept(self) -> Conn:
+        """Accept and return the next incoming connection (blocks)."""
         ...
 
     @abc.abstractmethod
-    async def close(self) -> None:
+    def close(self) -> None:
         """Stop listening."""
         ...
 
@@ -72,9 +73,9 @@ class Listener(abc.ABC):
 
 
 class Dialer(abc.ABC):
-    """Client-side dialer interface."""
+    """Client-side dialer interface (synchronous)."""
 
     @abc.abstractmethod
-    async def dial(self, address: str) -> Conn:
-        """Establish a connection to the given address."""
+    def dial(self, address: str) -> Conn:
+        """Establish a connection to the given address (blocks)."""
         ...

@@ -6,7 +6,6 @@ license = "MIT"
 requires-python = ">=3.11"
 readme = "README.md"
 dependencies = [
-    "websockets>=14.0",
     "pycryptodome>=3.20",
     "blake3>=1.0",
 ]
@@ -17,12 +16,8 @@ kcp = [
 ]
 dev = [
     "pytest>=8.0",
-    "pytest-asyncio>=0.24",
 ]
 
 [build-system]
 requires = ["setuptools>=68.0"]
 build-backend = "setuptools.build_meta"
-
-[tool.pytest.ini_options]
-asyncio_mode = "auto"

@@ -2,23 +2,18 @@
 
 from __future__ import annotations
 
-import asyncio
+import socket
 
 from ..conn import Conn, Dialer
 from .conn import TcpConn
 
 
 class TcpDialer(Dialer):
-    """TCP dialer using asyncio.open_connection."""
+    """TCP dialer using stdlib socket."""
 
-    async def dial(self, address: str) -> Conn:
-        """
-        Dial a TCP connection.
-
-        Args:
-            address: "host:port" format, e.g. "127.0.0.1:8080"
-        """
+    def dial(self, address: str) -> Conn:
         host, port_str = address.rsplit(":", 1)
         port = int(port_str)
-        reader, writer = await asyncio.open_connection(host, port)
-        return TcpConn(reader, writer)
+        sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        sock.connect((host, port))
+        return TcpConn(sock)

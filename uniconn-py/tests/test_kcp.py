@@ -1,36 +1,36 @@
-"""Unit tests for uniconn KCP adapter."""
+"""Unit tests for uniconn KCP adapter (synchronous)."""
 
-import asyncio
-import pytest
+import threading
+import time
 
 from uniconn.kcp import KcpListener, KcpDialer
 
 
-@pytest.mark.asyncio
-async def test_kcp_echo():
+def test_kcp_echo():
     """KCP: dialer sends data, listener echoes back."""
-    listener = await KcpListener.bind("127.0.0.1", 19100, conv_id=1)
+    listener = KcpListener.bind("127.0.0.1", 19200, conv_id=1)
 
-    async def server():
-        conn = await asyncio.wait_for(listener.accept(), timeout=5.0)
+    def server():
+        conn = listener.accept()
         buf = bytearray(1024)
-        n = await asyncio.wait_for(conn.read(buf), timeout=5.0)
-        await conn.write(bytes(buf[:n]))
-        # Small delay to ensure flush.
-        await asyncio.sleep(0.1)
+        n = conn.read(buf)
+        conn.write(bytes(buf[:n]))
 
-    server_task = asyncio.create_task(server())
+    t = threading.Thread(target=server, daemon=True)
+    t.start()
 
     dialer = KcpDialer(conv_id=1)
-    conn = await dialer.dial("127.0.0.1:19100")
+    conn = dialer.dial("127.0.0.1:19200")
+
+    time.sleep(0.1)  # Let KCP handshake settle.
 
     test_data = b"hello, uniconn Python KCP!"
-    await conn.write(test_data)
+    conn.write(test_data)
 
     buf = bytearray(1024)
-    n = await asyncio.wait_for(conn.read(buf), timeout=5.0)
+    n = conn.read(buf)
     assert buf[:n] == test_data
 
-    await conn.close()
-    await server_task
-    await listener.close()
+    conn.close()
+    t.join(timeout=10)
+    listener.close()

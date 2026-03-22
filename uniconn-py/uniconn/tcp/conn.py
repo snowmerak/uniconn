@@ -1,65 +1,54 @@
-"""TCP connection wrapping asyncio streams."""
+"""TCP connection wrapping stdlib socket."""
 
 from __future__ import annotations
 
-import asyncio
+import socket
 
 from ..conn import Addr, Conn
 from ..errors import ConnectionClosedError
 
 
 class TcpConn(Conn):
-    """TCP connection backed by asyncio StreamReader/StreamWriter."""
+    """TCP connection backed by a stdlib socket."""
 
-    def __init__(
-        self,
-        reader: asyncio.StreamReader,
-        writer: asyncio.StreamWriter,
-    ) -> None:
-        self._reader = reader
-        self._writer = writer
+    def __init__(self, sock: socket.socket) -> None:
+        self._sock = sock
         self._closed = False
 
-    async def read(self, buf: bytearray) -> int:
+    def read(self, buf: bytearray) -> int:
         if self._closed:
             raise ConnectionClosedError()
-        data = await self._reader.read(len(buf))
+        data = self._sock.recv(len(buf))
         if not data:
             return 0
         n = len(data)
         buf[:n] = data
         return n
 
-    async def write(self, data: bytes) -> int:
+    def write(self, data: bytes) -> int:
         if self._closed:
             raise ConnectionClosedError()
-        self._writer.write(data)
-        await self._writer.drain()
+        self._sock.sendall(data)
         return len(data)
 
-    async def close(self) -> None:
+    def close(self) -> None:
         if not self._closed:
             self._closed = True
-            self._writer.close()
             try:
-                await self._writer.wait_closed()
+                self._sock.close()
             except Exception:
                 pass
 
     def local_addr(self) -> Addr | None:
         try:
-            addr = self._writer.get_extra_info("sockname")
-            if addr:
-                return Addr(network="tcp", address=f"{addr[0]}:{addr[1]}")
+            addr = self._sock.getsockname()
+            return Addr(network="tcp", address=f"{addr[0]}:{addr[1]}")
         except Exception:
-            pass
-        return None
+            return None
 
     def remote_addr(self) -> Addr | None:
         try:
-            addr = self._writer.get_extra_info("peername")
-            if addr:
-                return Addr(network="tcp", address=f"{addr[0]}:{addr[1]}")
+            addr = self._sock.getpeername()
+            return Addr(network="tcp", address=f"{addr[0]}:{addr[1]}")
         except Exception:
-            pass
-        return None
+            return None

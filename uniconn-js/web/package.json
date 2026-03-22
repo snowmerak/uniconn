@@ -1,0 +1,19 @@
+{
+  "name": "@uniconn/web",
+  "version": "0.1.0",
+  "description": "uniconn browser adapters — WebSocket (browser API), WebTransport",
+  "main": "dist/index.js",
+  "types": "dist/index.d.ts",
+  "type": "module",
+  "scripts": {
+    "build": "tsc"
+  },
+  "license": "MIT",
+  "dependencies": {
+    "@uniconn/core": "0.1.0",
+    "@noble/post-quantum": "^0.5.4"
+  },
+  "devDependencies": {
+    "typescript": "^5.7.0"
+  }
+}

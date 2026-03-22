@@ -1,0 +1,31 @@
+{
+  "name": "@uniconn/core",
+  "version": "0.1.0",
+  "description": "uniconn core — shared interfaces and E2EE protocol",
+  "main": "dist/index.js",
+  "types": "dist/index.d.ts",
+  "type": "module",
+  "exports": {
+    ".": "./dist/index.js",
+    "./secure/constants": "./dist/secure/constants.js",
+    "./secure/identity": "./dist/secure/identity.js",
+    "./secure/message": "./dist/secure/message.js",
+    "./secure/handshake": "./dist/secure/handshake.js",
+    "./secure/conn": "./dist/secure/conn.js",
+    "./secure": "./dist/secure/index.js",
+    "./conn": "./dist/conn.js",
+    "./errors": "./dist/errors.js"
+  },
+  "scripts": {
+    "build": "tsc"
+  },
+  "license": "MIT",
+  "dependencies": {
+    "@noble/hashes": "^2.0.1",
+    "@stablelib/xchacha20poly1305": "^2.0.1",
+    "mlkem": "^2.7.0"
+  },
+  "devDependencies": {
+    "typescript": "^5.7.0"
+  }
+}

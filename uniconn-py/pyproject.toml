@@ -15,9 +15,13 @@ dependencies = [
 kcp = [
     "kcp>=0.1.6",
 ]
+quic = [
+    "aioquic>=1.0",
+]
 dev = [
     "pytest>=8.0",
     "pytest-asyncio>=1.0",
+    "cryptography>=42.0",
 ]
 
 [build-system]

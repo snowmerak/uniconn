@@ -22,7 +22,7 @@ from uniconn.websocket.listener import WsListener
 def echo_handler(conn):
     """Echo data back until connection closes."""
     try:
-        buf = bytearray(4096)
+        buf = bytearray(256 * 1024)  # 256KB buffer for large payloads
         while True:
             n = conn.read(buf)
             if n == 0:

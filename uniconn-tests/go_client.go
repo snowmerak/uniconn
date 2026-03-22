@@ -72,7 +72,11 @@ func tcpEcho(address string, data []byte) {
 }
 
 func wsEcho(address string, data []byte) {
-	c, _, err := websocket.DefaultDialer.Dial(address, nil)
+	dialer := websocket.Dialer{
+		ReadBufferSize:  128 * 1024,
+		WriteBufferSize: 128 * 1024,
+	}
+	c, _, err := dialer.Dial(address, nil)
 	if err != nil {
 		log.Fatalf("dial: %v", err)
 	}

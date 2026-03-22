@@ -6,14 +6,14 @@
 
 ## 지원 프로토콜
 
-| 프로토콜 | Go | Node.js | 웹 브라우저 | 특징 |
-|---|:---:|:---:|:---:|---|
-| **TCP** | ✅ | ✅ | — | 기본 스트림 전송 |
-| **WebSocket** | ✅ | ✅ | ✅ | 웹 호환, 양방향 스트림 |
-| **QUIC** | ✅ | 🔜 | — | UDP 기반, 멀티플렉싱, 0-RTT |
-| **WebTransport** | ✅ | 🔜 | ✅ | HTTP/3 기반, 브라우저 네이티브 지원 |
-| **KCP** | ✅ | ✅ | — | 저지연 UDP, ARQ 기반 신뢰 전송 |
-| **E2EE (USCP v1)** | ✅ | ✅ | ✅ | 양자 저항 암호, 모든 전송 레이어 위에서 동작 |
+| 프로토콜 | Go | Node.js | Python | 웹 브라우저 | 특징 |
+|---|:---:|:---:|:---:|:---:|---|
+| **TCP** | ✅ | ✅ | ✅ | — | 기본 스트림 전송 |
+| **WebSocket** | ✅ | ✅ | ✅ | ✅ | 웹 호환, 양방향 스트림 |
+| **QUIC** | ✅ | 🔜 | 🔜 | — | UDP 기반, 멀티플렉싱, 0-RTT |
+| **WebTransport** | ✅ | 🔜 | 🔜 | ✅ | HTTP/3 기반, 브라우저 네이티브 지원 |
+| **KCP** | ✅ | ✅ | 🔜 | — | 저지연 UDP, ARQ 기반 신뢰 전송 |
+| **E2EE (USCP v1)** | ✅ | ✅ | ✅ | ✅ | 양자 저항 암호, 모든 전송 레이어 위에서 동작 |
 
 ## 설계 철학
 
@@ -21,6 +21,7 @@
 
 - **Go**: `net.Conn` 인터페이스 그대로 반환 → 기존 코드와 100% 호환
 - **Node.js**: `IConn` 인터페이스로 `read(buffer)` / `write(data)` / `close()` 제공
+- **Python**: `Conn` ABC 인터페이스로 `read(buf)` / `write(data)` / `close()` 제공 (asyncio 기반)
 
 프로토콜을 바꿔도 애플리케이션 코드는 **한 줄도 수정할 필요 없습니다**.
 
@@ -39,6 +40,13 @@ go get github.com/snowmerak/uniconn/uniconn-go
 ```bash
 cd uniconn-node
 npm install
+```
+
+### Python
+
+```bash
+cd uniconn-py
+pip install -e ".[dev]"
 ```
 
 ## 사용법
@@ -381,13 +389,27 @@ TCP + WebSocket + KCP 교차 에코 = **8/8 PASS**
 
 Node.js에서는 `node:crypto` 내장 ML-DSA-87을 사용하므로 `@noble/post-quantum`가 불필요합니다.
 
+### Python
+
+| 패키지 | 용도 |
+|---|---|
+| `pqcrypto` | ML-DSA-87 서명 (PQClean 바인딩) |
+| `blake3` | BLAKE3 해시/KDF |
+| `pycryptodome` | XChaCha20-Poly1305 AEAD |
+| `websockets` | WebSocket (서버/클라이언트) |
+
 ## TODO
 
 - [ ] Node.js QUIC 어댑터 (`node:quic` — Node.js 25 예정)
 - [ ] Node.js WebTransport 서버
+- [ ] Python QUIC 어댑터 (`aioquic`)
+- [ ] Python KCP 어댑터
+- [ ] Python WebTransport 어댑터
+- [ ] Go ↔ Python 크로스 플랫폼 E2EE 테스트
+- [ ] .NET SignalR 스타일 멀티 프로토콜 자동 선택/폴백 (WebSocket → WebTransport → QUIC 자동 협상)
 - [ ] 벤치마크 (프로토콜 간 지연/처리량 비교)
 - [ ] E2EE 키 영속화 유틸리티 (파일/IndexedDB)
-- [ ] Go ↔ Node.js ↔ 브라우저 3자 동시 통합 테스트
+- [ ] Go ↔ Node.js ↔ Python ↔ 브라우저 다자 동시 통합 테스트
 
 ## 라이선스
 

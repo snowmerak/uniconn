@@ -1,2 +1,10 @@
 node_modules
 uniconn-node/dist
+uniconn-rs/target
+uniconn-py/__pycache__
+uniconn-py/uniconn.egg-info
+uniconn-py/.venv
+uniconn-py/.pytest_cache
+*.pyc
+*.pyo
+*.pyd

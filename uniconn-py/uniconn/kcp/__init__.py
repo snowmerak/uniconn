@@ -1,19 +1,17 @@
-"""KCP transport adapter for uniconn (synchronous).
+"""KCP transport adapter for uniconn (asyncio).
 
-Uses the `kcp` PyPI package (kcp-py) which provides Python bindings
+Uses the ``kcp`` PyPI package (kcp-py) which provides Python bindings
 for the KCP reliable UDP protocol.
 
-- KcpListener: wraps kcp-py's KCPServerAsync in a background thread
-- KcpDialer: wraps kcp-py's KCPClientSync directly
+- KcpListener: uses KCPServerAsync directly (no thread wrapper)
+- KcpDialer: uses KCPClientSync in asyncio.to_thread (sync-only API)
 """
 
 from __future__ import annotations
 
 import asyncio
 import threading
-import time
 from typing import Any
-from queue import Queue, Empty
 
 from ..conn import Addr, Conn, Listener, Dialer
 from ..errors import ConnectionClosedError
@@ -28,21 +26,23 @@ class KcpConn(Conn):
         send_fn: Any = None,
         local_address: str | None = None,
         remote_address: str | None = None,
+        loop: asyncio.AbstractEventLoop | None = None,
     ) -> None:
         self._conn = kcp_conn
-        self._send_fn = send_fn  # for client-side direct send
+        self._send_fn = send_fn
         self._local_addr = local_address
         self._remote_addr = remote_address
-        self._recv_queue: Queue[bytes] = Queue()
+        self._recv_queue: asyncio.Queue[bytes] = asyncio.Queue()
         self._recv_buf = bytearray()
         self._closed = False
+        self._loop = loop or asyncio.get_event_loop()
 
     def _on_data(self, data: bytes) -> None:
         """Called when data arrives."""
         if not self._closed:
-            self._recv_queue.put(data)
+            self._recv_queue.put_nowait(data)
 
-    def read(self, buf: bytearray) -> int:
+    async def read(self, buf: bytearray) -> int:
         if self._closed:
             raise ConnectionClosedError()
 
@@ -53,8 +53,8 @@ class KcpConn(Conn):
             return n
 
         try:
-            data = self._recv_queue.get(timeout=10.0)
-        except Empty:
+            data = await asyncio.wait_for(self._recv_queue.get(), timeout=10.0)
+        except asyncio.TimeoutError:
             return 0
 
         n = min(len(buf), len(data))
@@ -63,7 +63,7 @@ class KcpConn(Conn):
             self._recv_buf.extend(data[n:])
         return n
 
-    def write(self, data: bytes) -> int:
+    async def write(self, data: bytes) -> int:
         if self._closed:
             raise ConnectionClosedError()
         if self._send_fn:
@@ -72,7 +72,7 @@ class KcpConn(Conn):
             self._conn.enqueue(data)
         return len(data)
 
-    def close(self) -> None:
+    async def close(self) -> None:
         self._closed = True
 
     def local_addr(self) -> Addr | None:
@@ -87,60 +87,54 @@ class KcpConn(Conn):
 
 
 class KcpListener(Listener):
-    """KCP listener using kcp-py's KCPServerAsync in a background thread."""
+    """KCP listener using KCPServerAsync directly."""
 
     def __init__(self, addr: Addr) -> None:
         self._addr = addr
-        self._conn_queue: Queue[KcpConn] = Queue()
+        self._conn_queue: asyncio.Queue[KcpConn] = asyncio.Queue()
         self._connections: dict[tuple, KcpConn] = {}
-        self._thread: threading.Thread | None = None
+        self._server: Any = None
         self._closed = False
 
     @classmethod
-    def bind(
+    async def bind(
         cls, host: str = "0.0.0.0", port: int = 0, conv_id: int = 1
     ) -> "KcpListener":
         """Create and start a KCP listener."""
+        from kcp import KCPServerAsync
+
         listener = cls(Addr(network="kcp", address=f"{host}:{port}"))
-        ready = threading.Event()
+        loop = asyncio.get_running_loop()
+        listener._loop = loop
 
-        def run_server():
-            # Create event loop + KCPServerAsync inside the thread.
-            loop = asyncio.new_event_loop()
-            asyncio.set_event_loop(loop)
+        server = KCPServerAsync(host, port, conv_id=conv_id)
 
-            from kcp import KCPServerAsync
+        @server.on_data
+        async def handle_data(connection: Any, data: bytes) -> None:
+            addr_tuple = connection.address_tuple
+            if addr_tuple not in listener._connections:
+                kcp_conn = KcpConn(
+                    connection,
+                    local_address=f"{host}:{port}",
+                    remote_address=f"{addr_tuple[0]}:{addr_tuple[1]}",
+                    loop=loop,
+                )
+                listener._connections[addr_tuple] = kcp_conn
+                listener._conn_queue.put_nowait(kcp_conn)
+            listener._connections[addr_tuple]._on_data(data)
 
-            server = KCPServerAsync(host, port, conv_id=conv_id)
+        listener._server = server
 
-            @server.on_data
-            def handle_data(connection: Any, data: bytes) -> None:
-                addr_tuple = connection.address_tuple
-                if addr_tuple not in listener._connections:
-                    kcp_conn = KcpConn(
-                        connection,
-                        local_address=f"{host}:{port}",
-                        remote_address=f"{addr_tuple[0]}:{addr_tuple[1]}",
-                    )
-                    listener._connections[addr_tuple] = kcp_conn
-                    listener._conn_queue.put(kcp_conn)
-                listener._connections[addr_tuple]._on_data(data)
+        # listen() is a coroutine — run as a background task in current loop.
+        asyncio.create_task(server.listen())
+        await asyncio.sleep(0.15)  # Let server bind.
 
-            ready.set()
-            server.start()  # Blocking — runs the event loop.
-
-        thread = threading.Thread(target=run_server, daemon=True)
-        thread.start()
-        ready.wait(timeout=2.0)
-        time.sleep(0.1)  # Extra time for UDP bind.
-
-        listener._thread = thread
         return listener
 
-    def accept(self) -> Conn:
-        return self._conn_queue.get()
+    async def accept(self) -> Conn:
+        return await self._conn_queue.get()
 
-    def close(self) -> None:
+    async def close(self) -> None:
         self._closed = True
 
     def addr(self) -> Addr:
@@ -148,21 +142,18 @@ class KcpListener(Listener):
 
 
 class KcpDialer(Dialer):
-    """KCP dialer using kcp-py's KCPClientSync."""
+    """KCP dialer using KCPClientSync via asyncio.to_thread."""
 
     def __init__(self, conv_id: int = 1) -> None:
         self._conv_id = conv_id
 
-    def dial(self, address: str) -> Conn:
+    async def dial(self, address: str) -> Conn:
         from kcp import KCPClientSync
 
         host, port_str = address.rsplit(":", 1)
         port = int(port_str)
 
-        kcp_conn = KcpConn(
-            None,
-            remote_address=address,
-        )
+        kcp_conn = KcpConn(None, remote_address=address)
 
         client = KCPClientSync(
             host, port,
@@ -181,9 +172,9 @@ class KcpDialer(Dialer):
 
         kcp_conn._send_fn = client.send
 
-        # Start client in background thread.
+        # KCPClientSync.start() is blocking, run in thread.
         thread = threading.Thread(target=client.start, daemon=True)
         thread.start()
-        time.sleep(0.05)  # Let client connect.
+        await asyncio.sleep(0.05)  # Let client connect.
 
         return kcp_conn

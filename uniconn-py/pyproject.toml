@@ -1,6 +1,6 @@
 [project]
 name = "uniconn"
-version = "0.1.0"
+version = "0.2.0"
 description = "Universal connection interface — TCP, WebSocket, KCP with post-quantum E2EE"
 license = "MIT"
 requires-python = ">=3.11"
@@ -8,6 +8,7 @@ readme = "README.md"
 dependencies = [
     "pycryptodome>=3.20",
     "blake3>=1.0",
+    "websockets>=16.0",
 ]
 
 [project.optional-dependencies]
@@ -16,6 +17,7 @@ kcp = [
 ]
 dev = [
     "pytest>=8.0",
+    "pytest-asyncio>=1.0",
 ]
 
 [build-system]

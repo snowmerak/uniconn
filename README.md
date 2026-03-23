@@ -221,6 +221,113 @@ Initiator                 Relay              Responder
 
 두 백엔드 모두 `IIdentity` 인터페이스를 구현하며, `handshakeInitiator` / `handshakeResponder`에 교체 가능합니다.
 
+### E2EE 키 영속화 (IdentityStore)
+
+ML-DSA-87 키쌍을 마스터 패스워드로 암호화하여 파일에 저장/복원합니다.
+Go, Node.js, Python 모두 동일한 UCID 바이너리 포맷을 사용하여 **크로스 플랫폼 호환**됩니다.
+
+| 항목 | 값 |
+|---|---|
+| KDF | Argon2id (t=3, m=64MB, p=4) → 32B key |
+| AEAD | XChaCha20-Poly1305 |
+| 포맷 | `[4B "UCID"] [1B v1] [32B salt] [24B nonce] [encrypted(sk\|\|pk) + 16B tag]` |
+
+```go
+// Go — 저장 / 복원
+secure.SaveIdentity("id.ucid", identity, []byte("password"))
+loaded, _ := secure.LoadIdentity("id.ucid", []byte("password"))
+```
+
+```typescript
+// Node.js — 암복호화 (파일 I/O는 호출자 책임)
+import { encryptIdentity, decryptIdentity } from "@uniconn/core/secure/store";
+
+const data = encryptIdentity(sk, pk, pw, randomBytes);
+const { secretKey, publicKey } = decryptIdentity(data, pw);
+```
+
+```python
+# Python — 저장 / 복원
+from uniconn.secure.store import save_identity, load_identity
+
+save_identity("id.ucid", identity, b"password")
+loaded = load_identity("id.ucid", b"password")
+```
+
+## 멀티 프로토콜 자동 선택
+
+서버가 HTTP `/negotiate` 엔드포인트로 지원 프로토콜을 광고하고, 클라이언트가 우선순위에 따라 최적의 프로토콜을 자동 선택합니다.
+
+```
+Client                          Server
+  │                                │
+  │── GET /negotiate ─────────────►│
+  │◄── {protocols: [{name, addr}]} │
+  │                                │
+  │  (우선순위: WT > QUIC > WS > KCP > TCP)
+  │── 최적 프로토콜로 연결 ────────►│
+```
+
+### Go
+
+```go
+import "github.com/snowmerak/uniconn/uniconn-go/multi"
+
+// 서버: 여러 프로토콜을 동시에 리슨 + /negotiate 엔드포인트
+ml, _ := multi.NewMultiListener(":19000",
+    multi.TransportConfig{Protocol: multi.ProtoWebSocket, Address: "ws://host:19002/ws", Listener: wsLn},
+    multi.TransportConfig{Protocol: multi.ProtoTCP, Address: "host:19001", Listener: tcpLn},
+)
+conn, proto, _ := ml.AcceptWith() // 어떤 프로토콜이든 수신
+
+// 클라이언트: negotiate 후 최적 프로토콜로 자동 연결
+md := multi.NewMultiDialer(multi.DialerConfig{
+    NegotiateURL: "http://server:19000/negotiate",
+    Dialers: map[multi.Protocol]uniconn.Dialer{
+        multi.ProtoWebSocket: websocket.NewDialer(nil),
+        multi.ProtoTCP:       tcp.NewDialer(nil),
+    },
+})
+conn, proto, _ := md.Dial(ctx) // WS 실패 시 TCP로 자동 폴백
+```
+
+### Node.js
+
+```typescript
+import { MultiDialer, MultiListener } from "@uniconn/core/multi";
+
+// 서버: MultiListener + negotiate 응답 생성
+const ml = new MultiListener([...transports]);
+const negJson = ml.getNegotiateResponse(); // HTTP 핸들러에서 반환
+const { conn, protocol } = await ml.acceptWith();
+
+// 클라이언트: negotiate → 자동 선택
+const md = new MultiDialer({
+  negotiateURL: "http://server:19000/negotiate",
+  dialers: { tcp: tcpDialer, websocket: wsDialer },
+});
+const { conn, protocol } = await md.dial();
+```
+
+### Python
+
+```python
+from uniconn.multi import MultiDialer, MultiDialerConfig, MultiListener, TransportConfig
+
+# 서버: MultiListener + negotiate 응답
+ml = MultiListener([TransportConfig(...), ...])
+await ml.start()
+neg = ml.get_negotiate_response()  # HTTP 핸들러에서 반환
+result = await ml.accept_with()
+
+# 클라이언트: negotiate → 자동 선택
+md = MultiDialer(MultiDialerConfig(
+    negotiate_url="http://server:19000/negotiate",
+    dialers={"tcp": tcp_dialer, "websocket": ws_dialer},
+))
+conn, proto = await md.dial()
+```
+
 ## 인터페이스
 
 ### Go
@@ -278,11 +385,17 @@ uniconn/
 │   ├── kcp/                        # KCP 어댑터 (kcp-go)
 │   ├── secure/                     # E2EE 보안 채널 (USCP v1)
 │   │   ├── identity.go             # ML-DSA-87 키쌍, 핑거프린트
+│   │   ├── store.go                # IdentityStore (키 영속화)
 │   │   ├── handshake.go            # 핸드셰이크 (ML-KEM-1024 키교환)
 │   │   ├── conn.go                 # SecureConn (XChaCha20-Poly1305 AEAD)
 │   │   ├── message.go              # 와이어 포맷 마샬/언마샬
 │   │   ├── constants.go            # 프로토콜 상수
 │   │   └── crosstest/              # 크로스 플랫폼 테스트 서버/브라우저 페이지
+│   ├── multi/                      # 멀티 프로토콜 자동 선택
+│   │   ├── protocol.go             # Protocol 타입, 우선순위
+│   │   ├── negotiate.go            # /negotiate HTTP 핸들러
+│   │   ├── listener.go             # MultiListener (fan-in)
+│   │   └── dialer.go               # MultiDialer (negotiate → auto-connect)
 │   ├── cmd/echoserver/             # 5-프로토콜 에코 서버 (TCP/WS/QUIC/WT/KCP)
 │   └── test/                       # 통합 테스트
 │
@@ -290,10 +403,10 @@ uniconn/
 │   ├── core/                       # @uniconn/core — 플랫폼 독립 코어
 │   │   └── src/
 │   │       ├── conn.ts             # IConn, IListener, IDialer 인터페이스
-│   │       └── secure/             # E2EE 보안 채널
-│   │           ├── handshake.ts    # 핸드셰이크 (ML-KEM-1024)
-│   │           ├── conn.ts         # SecureConn (XChaCha20-Poly1305 AEAD)
-│   │           └── message.ts     # 와이어 포맷 마샬/언마샬
+│   │       ├── secure/             # E2EE 보안 채널
+│   │       │   ├── store.ts        # IdentityStore (키 영속화)
+│   │       │   └── ...             # handshake, conn, message
+│   │       └── multi/index.ts      # MultiDialer, MultiListener, negotiate
 │   ├── node/                       # @uniconn/node — Node.js 어댑터
 │   │   └── src/
 │   │       ├── tcp/                # TCP (net.Socket)
@@ -313,11 +426,12 @@ uniconn/
 │       ├── websocket/              # WebSocket 어댑터 (websockets)
 │       ├── quic/                   # QUIC 어댑터 (aioquic)
 │       ├── kcp/                    # KCP 어댑터 (kcp-py)
-│       └── secure/                 # E2EE 보안 채널 (USCP v1)
-│           ├── identity.py         # ML-DSA-87 (dilithium-py, FIPS 204)
-│           ├── handshake.py        # 핸드셰이크 (ML-KEM-1024, FIPS 203)
-│           ├── conn.py             # SecureConn (XChaCha20-Poly1305)
-│           └── message.py          # 와이어 포맷 마샬/언마샬
+│       ├── secure/                 # E2EE 보안 채널 (USCP v1)
+│       │   ├── identity.py         # ML-DSA-87 (dilithium-py, FIPS 204)
+│       │   ├── store.py            # IdentityStore (키 영속화)
+│       │   └── ...                 # handshake, conn, message
+│       └── multi/                  # 멀티 프로토콜 자동 선택
+│           └── __init__.py         # MultiDialer, MultiListener, negotiate
 │
 └── uniconn-tests/                  # 크로스 언어 통합 테스트 (pytest)
     ├── conftest.py                 # Go 에코 서버 fixture
@@ -326,7 +440,8 @@ uniconn/
     ├── test_python_go.py           # Python↔Go (TCP, WS)
     ├── test_node_go.py             # Node↔Go (TCP, WS)
     ├── test_python_node.py         # Python↔Node (TCP, WS)
-    └── test_e2ee.py                # E2EE 크로스 언어 (Go↔Python TCP/WS, Go↔Node TCP)
+    ├── test_e2ee.py                # E2EE 크로스 언어 (Go↔Python TCP/WS, Go↔Node TCP)
+    └── test_store_interop.py       # IdentityStore 크로스 언어 (Go↔Node↔Python)
 ```
 
 ## 테스트

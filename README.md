@@ -11,7 +11,7 @@
 | **TCP**            |   ✅   |    ✅    |   ✅    |      —      | 기본 스트림 전송                             |
 | **WebSocket**      |   ✅   |    ✅    |   ✅    |      ✅      | 웹 호환, 양방향 스트림                       |
 | **QUIC**           |   ✅   |    🔜    |   ✅    |      —      | UDP 기반, 멀티플렉싱, 0-RTT                  |
-| **WebTransport**   |   ✅   |    🔜    |   🔜    |      ✅      | HTTP/3 기반, 브라우저 네이티브 지원          |
+| **WebTransport**   |   ✅   |    🔜    |   ✅    |      ✅      | HTTP/3 기반, 브라우저 네이티브 지원          |
 | **KCP**            |   ✅   |    ✅    |   ✅    |      —      | 저지연 UDP, ARQ 기반 신뢰 전송               |
 | **E2EE (USCP v1)** |   ✅   |    ✅    |   ✅    |      ✅      | 양자 저항 암호, 모든 전송 레이어 위에서 동작 |
 
@@ -355,16 +355,16 @@ npm run build
 node --test dist/test/secure.test.js     # Node ↔ Node E2EE (3/3 PASS)
 ```
 
-### 크로스 언어 통합 테스트 (24/24 PASS)
+### 크로스 언어 통합 테스트 (26/26 PASS)
 
 ```bash
 cd uniconn-tests
-python -m pytest -v    # 24/24 PASS
+python -m pytest -v    # 26/26 PASS
 ```
 
 | 테스트      | 프로토콜           | 설명                           |
 | ----------- | ------------------ | ------------------------------ |
-| Go↔Python   | TCP, WS, KCP, QUIC | 에코 + 64KB 대용량             |
+| Go↔Python   | TCP, WS, KCP, QUIC, WT | 에코 + 64KB 대용량             |
 | Go↔Node     | TCP, WS            | 에코 + 64KB 대용량             |
 | Python↔Go   | TCP, WS            | Python 서버 ← Go 클라이언트    |
 | Node↔Go     | TCP, WS            | Node 서버 ← Go 클라이언트      |
@@ -426,7 +426,7 @@ Node.js에서는 `node:crypto` 내장 ML-DSA-87을 사용하므로 `@noble/post-
 - [x] ~~Go ↔ Node.js 크로스 플랫폼 E2EE 테스트~~
 - [ ] Node.js QUIC 어댑터 (`node:quic` — Node.js 25 예정)
 - [ ] Node.js WebTransport 서버
-- [ ] Python WebTransport 어댑터 (`aioquic` H3)
+- [x] ~~Python WebTransport 어댑터 (`aioquic` H3)~~
 - [ ] .NET SignalR 스타일 멀티 프로토콜 자동 선택/폴백
 - [ ] 벤치마크 (프로토콜 간 지연/처리량 비교)
 - [ ] E2EE 키 영속화 유틸리티 (파일/IndexedDB)

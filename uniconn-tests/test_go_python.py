@@ -9,11 +9,12 @@ import pytest
 # Add uniconn-py to path so we can import uniconn.
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "uniconn-py"))
 
-from conftest import GO_TCP_PORT, GO_WS_PORT, GO_KCP_PORT, GO_QUIC_PORT
+from conftest import GO_TCP_PORT, GO_WS_PORT, GO_KCP_PORT, GO_QUIC_PORT, GO_WT_PORT
 
 from uniconn.tcp.dialer import TcpDialer
 from uniconn.websocket.dialer import WsDialer
 from uniconn.quic import QuicDialer
+from uniconn.webtransport import WebTransportDialer
 
 
 @pytest.mark.asyncio
@@ -145,3 +146,40 @@ async def test_go_quic_large(go_echo_server):
 
     assert bytes(received) == data
     await conn.close()
+
+
+@pytest.mark.asyncio
+async def test_go_wt_echo(go_echo_server):
+    """Python WebTransport client → Go WebTransport echo server."""
+    dialer = WebTransportDialer(verify_ssl=False)
+    conn = await dialer.dial(f"https://127.0.0.1:{GO_WT_PORT}/")
+
+    data = b"hello from Python WebTransport!"
+    await conn.write(data)
+
+    buf = bytearray(1024)
+    n = await conn.read(buf)
+    assert buf[:n] == data
+    await conn.close()
+
+
+@pytest.mark.asyncio
+async def test_go_wt_large(go_echo_server):
+    """Python WebTransport client → Go WebTransport echo server: 64KB payload."""
+    dialer = WebTransportDialer(verify_ssl=False)
+    conn = await dialer.dial(f"https://127.0.0.1:{GO_WT_PORT}/")
+
+    data = bytes(range(256)) * 256  # 64KB
+    await conn.write(data)
+
+    received = bytearray()
+    buf = bytearray(256 * 1024)
+    while len(received) < len(data):
+        n = await conn.read(buf)
+        if n == 0:
+            break
+        received.extend(buf[:n])
+
+    assert bytes(received) == data
+    await conn.close()
+

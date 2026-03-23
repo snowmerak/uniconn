@@ -362,14 +362,14 @@ cd uniconn-tests
 python -m pytest -v    # 24/24 PASS
 ```
 
-| 테스트 | 프로토콜 | 설명 |
-|---|---|---|
-| Go↔Python | TCP, WS, KCP, QUIC | 에코 + 64KB 대용량 |
-| Go↔Node | TCP, WS | 에코 + 64KB 대용량 |
-| Python↔Go | TCP, WS | Python 서버 ← Go 클라이언트 |
-| Node↔Go | TCP, WS | Node 서버 ← Go 클라이언트 |
-| Python↔Node | TCP, WS | Python 서버 ← Node 클라이언트 |
-| **E2EE** | **TCP, WS** | **Go↔Python, Go↔Node USCP v1** |
+| 테스트      | 프로토콜           | 설명                           |
+| ----------- | ------------------ | ------------------------------ |
+| Go↔Python   | TCP, WS, KCP, QUIC | 에코 + 64KB 대용량             |
+| Go↔Node     | TCP, WS            | 에코 + 64KB 대용량             |
+| Python↔Go   | TCP, WS            | Python 서버 ← Go 클라이언트    |
+| Node↔Go     | TCP, WS            | Node 서버 ← Go 클라이언트      |
+| Python↔Node | TCP, WS            | Python 서버 ← Node 클라이언트  |
+| **E2EE**    | **TCP, WS**        | **Go↔Python, Go↔Node USCP v1** |
 
 ## 의존성
 
@@ -408,15 +408,15 @@ Node.js에서는 `node:crypto` 내장 ML-DSA-87을 사용하므로 `@noble/post-
 
 ### Python
 
-| 패키지         | 용도                                |
-| -------------- | ----------------------------------- |
-| `websockets`   | WebSocket (서버/클라이언트)         |
-| `aioquic`      | QUIC / HTTP/3 (asyncio 기반)        |
-| `kcp-py`       | KCP (저지연 UDP)                    |
+| 패키지         | 용도                                   |
+| -------------- | -------------------------------------- |
+| `websockets`   | WebSocket (서버/클라이언트)            |
+| `aioquic`      | QUIC / HTTP/3 (asyncio 기반)           |
+| `kcp-py`       | KCP (저지연 UDP)                       |
 | `dilithium-py` | ML-DSA-87 서명 (FIPS 204, 순수 Python) |
-| `pqcrypto`     | ML-KEM-1024 키캡슐화 (FIPS 203)    |
-| `blake3`       | BLAKE3 해시/KDF                     |
-| `pycryptodome` | XChaCha20-Poly1305 AEAD             |
+| `pqcrypto`     | ML-KEM-1024 키캡슐화 (FIPS 203)        |
+| `blake3`       | BLAKE3 해시/KDF                        |
+| `pycryptodome` | XChaCha20-Poly1305 AEAD                |
 
 ## TODO
 

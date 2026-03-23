@@ -257,15 +257,16 @@ loaded = load_identity("id.ucid", b"password")
 ## 멀티 프로토콜 자동 선택
 
 서버가 HTTP `/negotiate` 엔드포인트로 지원 프로토콜을 광고하고, 클라이언트가 우선순위에 따라 최적의 프로토콜을 자동 선택합니다.
+필요한 경우 E2EE 지문(fingerprint)을 선택적으로 함께 전달하여 클라이언트가 연결 전 서버의 신원을 미리 파악하게 할 수 있습니다.
 
 ```
-Client                          Server
-  │                                │
-  │── GET /negotiate ─────────────►│
-  │◄── {protocols: [{name, addr}]} │
-  │                                │
-  │  (우선순위: WT > QUIC > WS > KCP > TCP)
-  │── 최적 프로토콜로 연결 ────────►│
+Client                                      Server
+  │                                            │
+  │── GET /negotiate ─────────────────────────►│
+  │◄── {protocols: [...], fingerprint: "..."} ─│
+  │                                            │
+  │  (우선순위: WT > QUIC > WS > KCP > TCP)    │
+  │── 최적 프로토콜로 연결 ────────────────────►│
 ```
 
 ### Go
@@ -298,7 +299,7 @@ import { MultiDialer, MultiListener } from "@uniconn/core/multi";
 
 // 서버: MultiListener + negotiate 응답 생성
 const ml = new MultiListener([...transports]);
-const negJson = ml.getNegotiateResponse(); // HTTP 핸들러에서 반환
+const negJson = ml.getNegotiateResponse(serverFP); // 옵션으로 fingerprint 전달 가능
 const { conn, protocol } = await ml.acceptWith();
 
 // 클라이언트: negotiate → 자동 선택
@@ -317,7 +318,7 @@ from uniconn.multi import MultiDialer, MultiDialerConfig, MultiListener, Transpo
 # 서버: MultiListener + negotiate 응답
 ml = MultiListener([TransportConfig(...), ...])
 await ml.start()
-neg = ml.get_negotiate_response()  # HTTP 핸들러에서 반환
+neg = ml.get_negotiate_response(server_fp)  # 옵션으로 fingerprint 전달 가능
 result = await ml.accept_with()
 
 # 클라이언트: negotiate → 자동 선택

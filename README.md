@@ -429,9 +429,9 @@ Node.js에서는 `node:crypto` 내장 ML-DSA-87을 사용하므로 `@noble/post-
 - [ ] Node.js QUIC 어댑터 (`node:quic` — Node.js 25 예정)
 - [ ] Node.js WebTransport 서버
 - [x] ~~Python WebTransport 어댑터 (`aioquic` H3)~~
-- [ ] .NET SignalR 스타일 멀티 프로토콜 자동 선택/폴백
+- [x] ~~.NET SignalR 스타일 멀티 프로토콜 자동 선택/폴백~~
 - [x] 벤치마크 (프로토콜 간 지연/처리량 비교)
-- [ ] E2EE 키 영속화 유틸리티 (파일/IndexedDB)
+- [x] ~~E2EE 키 영속화 유틸리티 (파일/IndexedDB)~~
 - [ ] Go ↔ Node.js ↔ Python ↔ 브라우저 다자 동시 통합 테스트
 
 ## 라이선스

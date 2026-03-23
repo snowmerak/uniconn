@@ -10,9 +10,9 @@
 | ------------------ | :---: | :-----: | :----: | :---------: | -------------------------------------------- |
 | **TCP**            |   ✅   |    ✅    |   ✅    |      —      | 기본 스트림 전송                             |
 | **WebSocket**      |   ✅   |    ✅    |   ✅    |      ✅      | 웹 호환, 양방향 스트림                       |
-| **QUIC**           |   ✅   |    🔜    |   🔜    |      —      | UDP 기반, 멀티플렉싱, 0-RTT                  |
+| **QUIC**           |   ✅   |    🔜    |   ✅    |      —      | UDP 기반, 멀티플렉싱, 0-RTT                  |
 | **WebTransport**   |   ✅   |    🔜    |   🔜    |      ✅      | HTTP/3 기반, 브라우저 네이티브 지원          |
-| **KCP**            |   ✅   |    ✅    |   🔜    |      —      | 저지연 UDP, ARQ 기반 신뢰 전송               |
+| **KCP**            |   ✅   |    ✅    |   ✅    |      —      | 저지연 UDP, ARQ 기반 신뢰 전송               |
 | **E2EE (USCP v1)** |   ✅   |    ✅    |   ✅    |      ✅      | 양자 저항 암호, 모든 전송 레이어 위에서 동작 |
 
 ## 설계 철학
@@ -283,76 +283,93 @@ uniconn/
 │   │   ├── message.go              # 와이어 포맷 마샬/언마샬
 │   │   ├── constants.go            # 프로토콜 상수
 │   │   └── crosstest/              # 크로스 플랫폼 테스트 서버/브라우저 페이지
-│   ├── cmd/echoserver/             # 5-프로토콜 에코 서버
+│   ├── cmd/echoserver/             # 5-프로토콜 에코 서버 (TCP/WS/QUIC/WT/KCP)
 │   └── test/                       # 통합 테스트
 │
-└── uniconn-node/                   # Node.js / 브라우저 구현 (TypeScript)
-    └── src/
-        ├── conn.ts                 # IConn, IListener, IDialer 인터페이스
-        ├── errors.ts               # TimeoutError, ConnectionClosedError
-        ├── tcp/                    # TCP 어댑터 (net.Socket)
-        ├── websocket/              # WebSocket 어댑터 (ws + 브라우저)
-        │   └── browser_conn.ts     # 브라우저 WebSocket → IConn 어댑터
-        ├── kcp/                    # KCP 어댑터 (kcpjs)
-        ├── webtransport/           # WebTransport 어댑터 (브라우저 전용)
-        ├── secure/                 # E2EE 보안 채널 (USCP v1)
-        │   ├── identity.ts         # IIdentity 인터페이스, VerifyFn 타입
-        │   ├── identity.node.ts    # NodeIdentity (node:crypto ML-DSA-87)
-        │   ├── identity.browser.ts # BrowserIdentity (@noble/post-quantum)
-        │   ├── handshake.ts        # 핸드셰이크 (플랫폼 독립)
-        │   ├── conn.ts             # SecureConn (XChaCha20-Poly1305 AEAD)
-        │   ├── message.ts          # 와이어 포맷 마샬/언마샬
-        │   └── constants.ts        # 프로토콜 상수
-        └── test/                   # 테스트
-            ├── secure.test.ts      # Node ↔ Node E2EE 테스트
-            └── cross.test.ts       # Go ↔ Node 크로스 플랫폼 테스트
+├── uniconn-js/                     # Node.js / 브라우저 구현 (TypeScript, npm workspaces)
+│   ├── core/                       # @uniconn/core — 플랫폼 독립 코어
+│   │   └── src/
+│   │       ├── conn.ts             # IConn, IListener, IDialer 인터페이스
+│   │       └── secure/             # E2EE 보안 채널
+│   │           ├── handshake.ts    # 핸드셰이크 (ML-KEM-1024)
+│   │           ├── conn.ts         # SecureConn (XChaCha20-Poly1305 AEAD)
+│   │           └── message.ts     # 와이어 포맷 마샬/언마샬
+│   ├── node/                       # @uniconn/node — Node.js 어댑터
+│   │   └── src/
+│   │       ├── tcp/                # TCP (net.Socket)
+│   │       ├── websocket/          # WebSocket (ws)
+│   │       ├── kcp/                # KCP (kcpjs)
+│   │       └── secure/identity.ts  # NodeIdentity (node:crypto ML-DSA-87)
+│   └── web/                        # @uniconn/web — 브라우저 어댑터
+│       └── src/
+│           ├── websocket/          # 브라우저 WebSocket → IConn
+│           ├── webtransport/       # WebTransport (브라우저 전용)
+│           └── secure/identity.ts  # BrowserIdentity (@noble/post-quantum)
+│
+├── uniconn-py/                     # Python 구현 (asyncio 기반)
+│   └── uniconn/
+│       ├── conn.py                 # Conn, Listener, Dialer ABC
+│       ├── tcp/                    # TCP 어댑터 (asyncio.streams)
+│       ├── websocket/              # WebSocket 어댑터 (websockets)
+│       ├── quic/                   # QUIC 어댑터 (aioquic)
+│       ├── kcp/                    # KCP 어댑터 (kcp-py)
+│       └── secure/                 # E2EE 보안 채널 (USCP v1)
+│           ├── identity.py         # ML-DSA-87 (dilithium-py, FIPS 204)
+│           ├── handshake.py        # 핸드셰이크 (ML-KEM-1024, FIPS 203)
+│           ├── conn.py             # SecureConn (XChaCha20-Poly1305)
+│           └── message.py          # 와이어 포맷 마샬/언마샬
+│
+└── uniconn-tests/                  # 크로스 언어 통합 테스트 (pytest)
+    ├── conftest.py                 # Go 에코 서버 fixture
+    ├── test_go_python.py           # Go↔Python (TCP, WS, KCP, QUIC)
+    ├── test_go_node.py             # Go↔Node (TCP, WS)
+    ├── test_python_go.py           # Python↔Go (TCP, WS)
+    ├── test_node_go.py             # Node↔Go (TCP, WS)
+    ├── test_python_node.py         # Python↔Node (TCP, WS)
+    └── test_e2ee.py                # E2EE 크로스 언어 (Go↔Python TCP/WS, Go↔Node TCP)
 ```
 
 ## 테스트
+
+### Python 내부 테스트
+
+```bash
+cd uniconn-py
+pip install -e ".[dev,quic]"
+python -m pytest tests/ -v    # TCP, WS, KCP, QUIC (7/7 PASS)
+```
 
 ### Go 단위 테스트
 
 ```bash
 cd uniconn-go
 go test -v ./secure/...    # E2EE 테스트
-go test -v ./test/...      # 통합 테스트 (5프로토콜 × 3페이로드 = 19/19 PASS)
+go test -v ./test/...      # 통합 테스트 (5프로토콜 × 3페이로드)
 ```
 
-### Node.js 테스트
+### Node.js 내부 테스트
 
 ```bash
-cd uniconn-node
-npm install
-npx tsc
+cd uniconn-js/node
+npm run build
 node --test dist/test/secure.test.js     # Node ↔ Node E2EE (3/3 PASS)
 ```
 
-### Go ↔ Node.js 크로스 플랫폼 E2EE 테스트
+### 크로스 언어 통합 테스트 (24/24 PASS)
 
 ```bash
-cd uniconn-node
-node --test dist/test/cross.test.js      # Go 서버 자동 생성, echo + 16KB 검증
+cd uniconn-tests
+python -m pytest -v    # 24/24 PASS
 ```
 
-### Go ↔ 브라우저 크로스 플랫폼 E2EE 테스트
-
-```bash
-cd uniconn-go
-# 서버 시작 (TCP + WebSocket + 정적 파일 서빙)
-echo "0000...00" | go run ./secure/crosstest/server
-
-# 브라우저에서 http://127.0.0.1:<wsPort>/ 접속
-# WS Port 입력 후 "Run Test" 클릭
-```
-
-### Go ↔ Node.js 교차 통합 테스트 (전송 레이어)
-
-```bash
-cd uniconn-node
-UNICONN_GO_DIR=../uniconn-go node --test dist/test/integration.test.js
-```
-
-TCP + WebSocket + KCP 교차 에코 = **8/8 PASS**
+| 테스트 | 프로토콜 | 설명 |
+|---|---|---|
+| Go↔Python | TCP, WS, KCP, QUIC | 에코 + 64KB 대용량 |
+| Go↔Node | TCP, WS | 에코 + 64KB 대용량 |
+| Python↔Go | TCP, WS | Python 서버 ← Go 클라이언트 |
+| Node↔Go | TCP, WS | Node 서버 ← Go 클라이언트 |
+| Python↔Node | TCP, WS | Python 서버 ← Node 클라이언트 |
+| **E2EE** | **TCP, WS** | **Go↔Python, Go↔Node USCP v1** |
 
 ## 의존성
 
@@ -391,22 +408,26 @@ Node.js에서는 `node:crypto` 내장 ML-DSA-87을 사용하므로 `@noble/post-
 
 ### Python
 
-| 패키지         | 용도                            |
-| -------------- | ------------------------------- |
-| `pqcrypto`     | ML-DSA-87 서명 (PQClean 바인딩) |
-| `blake3`       | BLAKE3 해시/KDF                 |
-| `pycryptodome` | XChaCha20-Poly1305 AEAD         |
-| `websockets`   | WebSocket (서버/클라이언트)     |
+| 패키지         | 용도                                |
+| -------------- | ----------------------------------- |
+| `websockets`   | WebSocket (서버/클라이언트)         |
+| `aioquic`      | QUIC / HTTP/3 (asyncio 기반)        |
+| `kcp-py`       | KCP (저지연 UDP)                    |
+| `dilithium-py` | ML-DSA-87 서명 (FIPS 204, 순수 Python) |
+| `pqcrypto`     | ML-KEM-1024 키캡슐화 (FIPS 203)    |
+| `blake3`       | BLAKE3 해시/KDF                     |
+| `pycryptodome` | XChaCha20-Poly1305 AEAD             |
 
 ## TODO
 
+- [x] ~~Python QUIC 어댑터 (`aioquic`)~~
+- [x] ~~Python KCP 어댑터 (`kcp-py`)~~
+- [x] ~~Go ↔ Python 크로스 플랫폼 E2EE 테스트~~
+- [x] ~~Go ↔ Node.js 크로스 플랫폼 E2EE 테스트~~
 - [ ] Node.js QUIC 어댑터 (`node:quic` — Node.js 25 예정)
 - [ ] Node.js WebTransport 서버
-- [ ] Python QUIC 어댑터 (`aioquic`)
-- [ ] Python KCP 어댑터
-- [ ] Python WebTransport 어댑터
-- [ ] Go ↔ Python 크로스 플랫폼 E2EE 테스트
-- [ ] .NET SignalR 스타일 멀티 프로토콜 자동 선택/폴백 (WebSocket → WebTransport → QUIC 자동 협상)
+- [ ] Python WebTransport 어댑터 (`aioquic` H3)
+- [ ] .NET SignalR 스타일 멀티 프로토콜 자동 선택/폴백
 - [ ] 벤치마크 (프로토콜 간 지연/처리량 비교)
 - [ ] E2EE 키 영속화 유틸리티 (파일/IndexedDB)
 - [ ] Go ↔ Node.js ↔ Python ↔ 브라우저 다자 동시 통합 테스트

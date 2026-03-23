@@ -18,6 +18,7 @@ JS_DIR = os.path.join(REPO_ROOT, "uniconn-js")
 # Go echo server ports.
 GO_TCP_PORT = 19001
 GO_WS_PORT = 19002
+GO_QUIC_PORT = 19003
 GO_KCP_PORT = 19005
 
 

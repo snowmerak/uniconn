@@ -1,4 +1,4 @@
-"""SecureConn — XChaCha20-Poly1305 encrypted connection (synchronous)."""
+"""SecureConn — XChaCha20-Poly1305 encrypted connection (async)."""
 
 from __future__ import annotations
 
@@ -21,7 +21,7 @@ from .message import read_frame_from_conn, write_frame_to_conn, marshal_data, ma
 
 class SecureConn(Conn):
     """
-    Encrypted connection wrapping any Conn with XChaCha20-Poly1305 (synchronous).
+    Encrypted connection wrapping any async Conn with XChaCha20-Poly1305.
     """
 
     def __init__(self, keys, is_initiator: bool) -> None:
@@ -45,7 +45,7 @@ class SecureConn(Conn):
         self._inner_conn = conn
         return self
 
-    def read(self, buf: bytearray) -> int:
+    async def read(self, buf: bytearray) -> int:
         assert self._inner_conn is not None
 
         if self._recv_buf:
@@ -54,7 +54,7 @@ class SecureConn(Conn):
             self._recv_buf = self._recv_buf[n:]
             return n
 
-        body = read_frame_from_conn(self._inner_conn)
+        body = await read_frame_from_conn(self._inner_conn)
         if not body:
             raise ConnectionError("empty frame")
 
@@ -99,7 +99,7 @@ class SecureConn(Conn):
             self._recv_buf.extend(plaintext[n:])
         return n
 
-    def write(self, data: bytes) -> int:
+    async def write(self, data: bytes) -> int:
         assert self._inner_conn is not None
 
         if not data:
@@ -119,17 +119,17 @@ class SecureConn(Conn):
         ct_with_tag = ciphertext + tag
 
         frame_body = marshal_data(ts, counter, ct_with_tag)
-        write_frame_to_conn(self._inner_conn, frame_body)
+        await write_frame_to_conn(self._inner_conn, frame_body)
         return len(data)
 
-    def close(self) -> None:
+    async def close(self) -> None:
         if self._inner_conn is not None:
             try:
                 err_body = marshal_error("closed")
-                write_frame_to_conn(self._inner_conn, err_body)
+                await write_frame_to_conn(self._inner_conn, err_body)
             except Exception:
                 pass
-            self._inner_conn.close()
+            await self._inner_conn.close()
 
     def local_addr(self) -> Addr | None:
         return self._inner_conn.local_addr() if self._inner_conn else None

@@ -1,24 +1,19 @@
 """
 ML-DSA-87 identity, fingerprint, sign, verify.
 
-Uses the `pqcrypto` package (PQClean bindings) for ML-DSA-87.
-Falls back to `dilithium_py` for environments without compiled bindings.
+Uses the `dilithium-py` package (ML_DSA_87 FIPS 204 implementation).
 """
 
 from __future__ import annotations
 
 import blake3 as _blake3
 
-from .constants import FINGERPRINT_SIZE, MLDSA_CONTEXT
+from .constants import FINGERPRINT_SIZE
 
-# Try PQClean bindings first, then fallback.
+# ML-DSA-87 (FIPS 204) from dilithium-py.
 try:
-    from pqcrypto.sign.dilithium5 import (
-        generate_keypair as _keygen,
-        sign as _sign_raw,
-        verify as _verify_raw,
-    )
-    _BACKEND = "pqcrypto"
+    from dilithium_py.ml_dsa import ML_DSA_87
+    _BACKEND = "dilithium-py"
 except ImportError:
     _BACKEND = None
 
@@ -39,12 +34,12 @@ class Identity:
     @classmethod
     def generate(cls) -> "Identity":
         """Generate a new ML-DSA-87 key pair."""
-        if _BACKEND == "pqcrypto":
-            pk, sk = _keygen()
+        if _BACKEND == "dilithium-py":
+            pk, sk = ML_DSA_87.keygen()
             return cls(bytes(pk), bytes(sk))
         raise RuntimeError(
             "No ML-DSA-87 backend available. "
-            "Install `pqcrypto` package: pip install pqcrypto"
+            "Install `dilithium-py` package: pip install dilithium-py"
         )
 
     def fingerprint(self) -> bytes:
@@ -52,12 +47,9 @@ class Identity:
         return compute_fingerprint(self._pk)
 
     def sign(self, data: bytes) -> bytes:
-        """Sign data. Returns raw signature bytes."""
-        if _BACKEND == "pqcrypto":
-            # pqcrypto.sign.dilithium5.sign returns signed_message (sig || msg),
-            # extract just the signature.
-            signed = _sign_raw(self._sk, data)
-            sig = signed[: len(signed) - len(data)]
+        """Sign data. Returns raw signature bytes (4627 bytes for ML-DSA-87)."""
+        if _BACKEND == "dilithium-py":
+            sig = ML_DSA_87.sign(self._sk, data)
             return bytes(sig)
         raise RuntimeError("No ML-DSA-87 backend available")
 
@@ -68,12 +60,9 @@ class Identity:
 
 def verify(pub_bytes: bytes, data: bytes, sig_bytes: bytes) -> bool:
     """Verify an ML-DSA-87 signature."""
-    if _BACKEND == "pqcrypto":
+    if _BACKEND == "dilithium-py":
         try:
-            # pqcrypto.sign.dilithium5.verify expects signed_message (sig || msg)
-            signed_message = sig_bytes + data
-            _verify_raw(pub_bytes, signed_message)
-            return True
+            return ML_DSA_87.verify(pub_bytes, data, sig_bytes)
         except Exception:
             return False
     return False

@@ -1,4 +1,4 @@
-"""USCP v1 handshake: initiator and responder (synchronous)."""
+"""USCP v1 handshake: initiator and responder (async)."""
 
 from __future__ import annotations
 
@@ -15,7 +15,7 @@ from .constants import (
     NONCE_PREFIX_SIZE,
 )
 from .identity import Identity, compute_fingerprint, verify as _default_verify
-from .message import marshal_hello, read_frame_from_conn, unmarshal_hello
+from .message import marshal_hello, read_frame_from_conn, unmarshal_hello, write_frame_to_conn
 from .conn import SecureConn
 
 VerifyFn = Callable[[bytes, bytes, bytes], bool]
@@ -42,18 +42,18 @@ def _derive_keys(shared_secret: bytes) -> SessionKeys:
     return SessionKeys(out[0:32], out[32:64], out[64:76], out[76:88])
 
 
-def handshake_initiator(
+async def handshake_initiator(
     conn: Conn,
     identity: Identity,
     peer_fp: bytes,
     verify_fn: VerifyFn | None = None,
 ) -> SecureConn:
-    """Perform the initiator side of the USCP handshake (blocking)."""
+    """Perform the initiator side of the USCP handshake (async)."""
     if verify_fn is None:
         verify_fn = _default_verify
 
     try:
-        from pqcrypto.kem.kyber1024 import generate_keypair, decrypt
+        from pqcrypto.kem.ml_kem_1024 import generate_keypair, decrypt
     except ImportError:
         raise RuntimeError("pqcrypto package required for ML-KEM-1024")
 
@@ -62,9 +62,9 @@ def handshake_initiator(
     sig = identity.sign(ek_bytes)
 
     hello = marshal_hello(MSG_HELLO, identity.public_key_bytes(), ek_bytes, sig)
-    conn.write(hello)
+    await conn.write(hello)
 
-    reply_body = read_frame_from_conn(conn)
+    reply_body = await read_frame_from_conn(conn)
     reply = unmarshal_hello(reply_body)
     if reply["msg_type"] != MSG_HELLO_REPLY:
         raise ValueError(f"expected HELLO_REPLY, got 0x{reply['msg_type']:02x}")
@@ -80,17 +80,17 @@ def handshake_initiator(
     return SecureConn(keys, is_initiator=True)
 
 
-def handshake_responder(
+async def handshake_responder(
     conn: Conn,
     identity: Identity,
     peer_fp: bytes,
     verify_fn: VerifyFn | None = None,
 ) -> SecureConn:
-    """Perform the responder side of the USCP handshake (blocking)."""
+    """Perform the responder side of the USCP handshake (async)."""
     if verify_fn is None:
         verify_fn = _default_verify
 
-    hello_body = read_frame_from_conn(conn)
+    hello_body = await read_frame_from_conn(conn)
     hello = unmarshal_hello(hello_body)
     if hello["msg_type"] != MSG_HELLO:
         raise ValueError(f"expected HELLO, got 0x{hello['msg_type']:02x}")
@@ -102,7 +102,7 @@ def handshake_responder(
         raise ValueError("signature verification failed")
 
     try:
-        from pqcrypto.kem.kyber1024 import encrypt
+        from pqcrypto.kem.ml_kem_1024 import encrypt
     except ImportError:
         raise RuntimeError("pqcrypto package required for ML-KEM-1024")
 
@@ -112,7 +112,7 @@ def handshake_responder(
 
     sig = identity.sign(ct_bytes)
     reply = marshal_hello(MSG_HELLO_REPLY, identity.public_key_bytes(), ct_bytes, sig)
-    conn.write(reply)
+    await conn.write(reply)
 
     keys = _derive_keys(shared_secret)
     return SecureConn(keys, is_initiator=False)

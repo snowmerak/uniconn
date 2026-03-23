@@ -1,31 +1,19 @@
-"""Wire format marshal/unmarshal for USCP v1 messages (synchronous)."""
+"""Wire format marshal/unmarshal for USCP v1 messages (async)."""
 
 from __future__ import annotations
 
 import struct
-import socket
 
 from .constants import MAX_MESSAGE_SIZE, MSG_DATA, MSG_ERROR, TIMESTAMP_SIZE, COUNTER_SIZE
 
 
-def recv_exact(sock: socket.socket, n: int) -> bytes:
-    """Receive exactly n bytes from a socket."""
-    buf = bytearray()
-    while len(buf) < n:
-        chunk = sock.recv(n - len(buf))
-        if not chunk:
-            raise ConnectionError("unexpected EOF during recv_exact")
-        buf.extend(chunk)
-    return bytes(buf)
-
-
-def read_frame_from_conn(conn) -> bytes:
-    """Read a framed message from a Conn: [4B big-endian length][body]."""
+async def read_frame_from_conn(conn) -> bytes:
+    """Read a framed message from an async Conn: [4B big-endian length][body]."""
     len_buf = bytearray(4)
     offset = 0
     while offset < 4:
         remaining = bytearray(4 - offset)
-        n = conn.read(remaining)
+        n = await conn.read(remaining)
         if n == 0:
             raise ConnectionError("unexpected EOF reading frame length")
         len_buf[offset:offset + n] = remaining[:n]
@@ -38,7 +26,7 @@ def read_frame_from_conn(conn) -> bytes:
     offset = 0
     while offset < length:
         remaining = bytearray(length - offset)
-        n = conn.read(remaining)
+        n = await conn.read(remaining)
         if n == 0:
             raise ConnectionError("unexpected EOF reading frame body")
         body[offset:offset + n] = remaining[:n]
@@ -46,10 +34,10 @@ def read_frame_from_conn(conn) -> bytes:
     return bytes(body)
 
 
-def write_frame_to_conn(conn, body: bytes) -> None:
-    """Write a framed message to a Conn: [4B big-endian length][body]."""
+async def write_frame_to_conn(conn, body: bytes) -> None:
+    """Write a framed message to an async Conn: [4B big-endian length][body]."""
     frame = struct.pack("!I", len(body)) + body
-    conn.write(frame)
+    await conn.write(frame)
 
 
 def marshal_hello(

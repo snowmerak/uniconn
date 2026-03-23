@@ -362,16 +362,16 @@ cd uniconn-tests
 python -m pytest -v    # 26/26 PASS
 ```
 
-| 테스트      | 프로토콜           | 설명                           |
-| ----------- | ------------------ | ------------------------------ |
-| Go↔Python   | TCP, WS, KCP, QUIC, WT | 에코 + 64KB 대용량             |
-| Go↔Node     | TCP, WS            | 에코 + 64KB 대용량             |
-| Python↔Go   | TCP, WS            | Python 서버 ← Go 클라이언트    |
-| Node↔Go     | TCP, WS            | Node 서버 ← Go 클라이언트      |
-| Python↔Node | TCP, WS            | Python 서버 ← Node 클라이언트  |
-| **E2EE**    | **TCP, WS**        | **Go↔Python, Go↔Node USCP v1** |
-| **Browser↔Go** | **WT**          | **브라우저 WebTransport echo** |
-| **Browser↔Python** | **WT**     | **브라우저 WebTransport echo** |
+| 테스트             | 프로토콜               | 설명                           |
+| ------------------ | ---------------------- | ------------------------------ |
+| Go↔Python          | TCP, WS, KCP, QUIC, WT | 에코 + 64KB 대용량             |
+| Go↔Node            | TCP, WS                | 에코 + 64KB 대용량             |
+| Python↔Go          | TCP, WS                | Python 서버 ← Go 클라이언트    |
+| Node↔Go            | TCP, WS                | Node 서버 ← Go 클라이언트      |
+| Python↔Node        | TCP, WS                | Python 서버 ← Node 클라이언트  |
+| **E2EE**           | **TCP, WS**            | **Go↔Python, Go↔Node USCP v1** |
+| **Browser↔Go**     | **WT**                 | **브라우저 WebTransport echo** |
+| **Browser↔Python** | **WT**                 | **브라우저 WebTransport echo** |
 
 ## 의존성
 
@@ -430,7 +430,7 @@ Node.js에서는 `node:crypto` 내장 ML-DSA-87을 사용하므로 `@noble/post-
 - [ ] Node.js WebTransport 서버
 - [x] ~~Python WebTransport 어댑터 (`aioquic` H3)~~
 - [ ] .NET SignalR 스타일 멀티 프로토콜 자동 선택/폴백
-- [ ] 벤치마크 (프로토콜 간 지연/처리량 비교)
+- [x] 벤치마크 (프로토콜 간 지연/처리량 비교)
 - [ ] E2EE 키 영속화 유틸리티 (파일/IndexedDB)
 - [ ] Go ↔ Node.js ↔ Python ↔ 브라우저 다자 동시 통합 테스트
 

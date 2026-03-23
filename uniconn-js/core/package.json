@@ -12,6 +12,7 @@
     "./secure/message": "./dist/secure/message.js",
     "./secure/handshake": "./dist/secure/handshake.js",
     "./secure/conn": "./dist/secure/conn.js",
+    "./secure/store": "./dist/secure/store.js",
     "./secure": "./dist/secure/index.js",
     "./conn": "./dist/conn.js",
     "./errors": "./dist/errors.js"

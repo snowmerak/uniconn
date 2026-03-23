@@ -9,6 +9,7 @@ dependencies = [
     "pycryptodome>=3.20",
     "blake3>=1.0",
     "websockets>=16.0",
+    "argon2-cffi>=23.1",
 ]
 
 [project.optional-dependencies]

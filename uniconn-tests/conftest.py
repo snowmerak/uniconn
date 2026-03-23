@@ -22,6 +22,14 @@ GO_QUIC_PORT = 19003
 GO_WT_PORT = 19004
 GO_KCP_PORT = 19005
 
+# Shared state for cert hash (set when Go server is spawned).
+_go_cert_hash: str | None = None
+
+
+def get_go_cert_hash() -> str | None:
+    """Return Go echo server's TLS cert SHA-256 hash (hex)."""
+    return _go_cert_hash
+
 
 def _is_port_open(port: int) -> bool:
     """Check if a port is already listening."""
@@ -38,13 +46,24 @@ def go_echo_server():
 
     If the server is already running (port 19001 open), reuse it.
     """
+    global _go_cert_hash
+
     if _is_port_open(GO_TCP_PORT):
         # Server already running — reuse.
         yield None
         return
 
+    # Use pre-built binary to avoid Windows firewall blocking
+    # go run's temp binary for UDP (QUIC/WebTransport).
+    exe = os.path.join(GO_DIR, "echoserver.exe")
+    if not os.path.isfile(exe):
+        # Fall back to go run if binary not found.
+        cmd = ["go", "run", "./cmd/echoserver"]
+    else:
+        cmd = [exe]
+
     proc = subprocess.Popen(
-        ["go", "run", "./cmd/echoserver"],
+        cmd,
         cwd=GO_DIR,
         stdout=subprocess.PIPE,
         stderr=subprocess.PIPE,
@@ -52,11 +71,13 @@ def go_echo_server():
         creationflags=subprocess.CREATE_NEW_PROCESS_GROUP if os.name == "nt" else 0,
     )
 
-    # Wait for READY line.
+    # Wait for READY line, also capture CERT_HASH.
     deadline = time.time() + 60  # Go build can be slow on first run.
     ready = False
     while time.time() < deadline:
         line = proc.stdout.readline().strip()
+        if line.startswith("CERT_HASH:"):
+            _go_cert_hash = line.split(":", 1)[1]
         if line == "READY":
             ready = True
             break

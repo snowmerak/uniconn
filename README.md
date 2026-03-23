@@ -370,6 +370,8 @@ python -m pytest -v    # 26/26 PASS
 | Node↔Go     | TCP, WS            | Node 서버 ← Go 클라이언트      |
 | Python↔Node | TCP, WS            | Python 서버 ← Node 클라이언트  |
 | **E2EE**    | **TCP, WS**        | **Go↔Python, Go↔Node USCP v1** |
+| **Browser↔Go** | **WT**          | **브라우저 WebTransport echo** |
+| **Browser↔Python** | **WT**     | **브라우저 WebTransport echo** |
 
 ## 의존성
 

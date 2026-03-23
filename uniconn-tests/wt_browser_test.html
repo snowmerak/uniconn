@@ -1,0 +1,133 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <title>WebTransport Echo Test</title>
+  <style>
+    body { font-family: 'Consolas', monospace; background: #1a1a2e; color: #e0e0ff; padding: 2em; max-width: 800px; margin: 0 auto; }
+    h1 { color: #00ff88; font-size: 1.4em; }
+    #log { white-space: pre-wrap; line-height: 1.6; }
+    .ok { color: #00ff88; } .err { color: #ff4444; } .info { color: #6699ff; }
+    button { background: #00ff88; color: #1a1a2e; border: none; padding: 0.6em 1.4em; cursor: pointer; font-size: 1em; border-radius: 4px; margin: 0.5em; font-family: inherit; }
+    button:disabled { background: #555; cursor: not-allowed; }
+    input { background: #2d2d44; color: #e0e0ff; border: 1px solid #444; padding: 0.4em; font-family: inherit; width: 100px; }
+    #result { display: none; }
+  </style>
+</head>
+<body>
+  <h1>🌐 WebTransport Echo Test</h1>
+  <div>
+    <label>WT Port: <input id="port" type="number" value="19004"></label>
+    <label>Cert Hash: <input id="certHash" type="text" style="width:500px" placeholder="hex SHA-256 hash of server cert"></label>
+  </div>
+  <div style="margin-top:0.5em">
+    <button id="runBtn" onclick="runTest()">Run Echo Test</button>
+  </div>
+  <pre id="log"></pre>
+  <div id="result"></div>
+
+  <script>
+    const logEl = document.getElementById("log");
+    const resultEl = document.getElementById("result");
+    function log(msg, cls = "info") {
+      const span = document.createElement("span");
+      span.className = cls;
+      span.textContent = msg + "\n";
+      logEl.appendChild(span);
+    }
+
+    function hexToBytes(hex) {
+      const b = new Uint8Array(hex.length / 2);
+      for (let i = 0; i < hex.length; i += 2) b[i / 2] = parseInt(hex.substring(i, i + 2), 16);
+      return b;
+    }
+
+    window.runTest = async function() {
+      document.getElementById("runBtn").disabled = true;
+      logEl.textContent = "";
+      resultEl.style.display = "none";
+
+      const port = parseInt(document.getElementById("port").value);
+      const certHashHex = document.getElementById("certHash").value.trim();
+
+      if (!port) { log("Enter a valid port", "err"); return; }
+
+      try {
+        // Build options for WebTransport.
+        const url = `https://127.0.0.1:${port}/`;
+        const opts = {};
+        if (certHashHex) {
+          opts.serverCertificateHashes = [{
+            algorithm: "sha-256",
+            value: hexToBytes(certHashHex).buffer,
+          }];
+        }
+
+        log(`🔌 Connecting to ${url} ...`);
+        const wt = new WebTransport(url, opts);
+        await wt.ready;
+        log("✅ WebTransport connected", "ok");
+
+        // Open bidi stream.
+        const stream = await wt.createBidirectionalStream();
+        const writer = stream.writable.getWriter();
+        const reader = stream.readable.getReader();
+        log("✅ Bidi stream opened", "ok");
+
+        // Test 1: Echo short message.
+        const msg = new TextEncoder().encode("hello from browser WebTransport!");
+        await writer.write(msg);
+        log(`→ Sent ${msg.length}B`);
+
+        const { value } = await reader.read();
+        const echo = new TextDecoder().decode(value);
+        log(`← Received ${value.length}B: "${echo}"`);
+
+        const match1 = echo === "hello from browser WebTransport!";
+        if (match1) log("✅ Echo match!", "ok");
+        else log("❌ Echo mismatch!", "err");
+
+        // Test 2: Larger payload (8KB).
+        const bigData = new Uint8Array(8192);
+        for (let i = 0; i < bigData.length; i++) bigData[i] = i % 256;
+        await writer.write(bigData);
+        log(`→ Sent 8KB`);
+
+        let received = new Uint8Array(0);
+        while (received.length < bigData.length) {
+          const { value: chunk } = await reader.read();
+          const merged = new Uint8Array(received.length + chunk.length);
+          merged.set(received);
+          merged.set(chunk, received.length);
+          received = merged;
+        }
+        let match2 = received.length === bigData.length;
+        if (match2) {
+          for (let i = 0; i < bigData.length; i++) {
+            if (received[i] !== bigData[i]) { match2 = false; break; }
+          }
+        }
+        if (match2) log("✅ 8KB echo match!", "ok");
+        else log("❌ 8KB echo mismatch!", "err");
+
+        writer.close();
+        wt.close();
+
+        const allPassed = match1 && match2;
+        resultEl.style.display = "block";
+        resultEl.id = "result";
+        resultEl.setAttribute("data-pass", allPassed ? "true" : "false");
+        resultEl.textContent = allPassed ? "ALL_PASSED" : "FAILED";
+        log(allPassed ? "\n🎉 All tests passed!" : "\n❌ Some tests failed!", allPassed ? "ok" : "err");
+
+      } catch (e) {
+        log(`❌ ERROR: ${e.message}`, "err");
+        resultEl.style.display = "block";
+        resultEl.setAttribute("data-pass", "false");
+        resultEl.textContent = "ERROR: " + e.message;
+      }
+      document.getElementById("runBtn").disabled = false;
+    };
+  </script>
+</body>
+</html>

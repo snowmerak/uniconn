@@ -14,6 +14,7 @@ import (
 	"crypto/ecdsa"
 	"crypto/elliptic"
 	"crypto/rand"
+	"crypto/sha256"
 	"crypto/tls"
 	"crypto/x509"
 	"encoding/pem"
@@ -41,6 +42,10 @@ func main() {
 	defer cancel()
 
 	tlsCfg := generateSelfSignedTLS()
+
+	// Print TLS cert hash for browser WebTransport serverCertificateHashes.
+	certHash := sha256.Sum256(tlsCfg.Certificates[0].Certificate[0])
+	fmt.Fprintf(os.Stdout, "CERT_HASH:%x\n", certHash)
 
 	var wg sync.WaitGroup
 	var listeners []uniconn.Listener

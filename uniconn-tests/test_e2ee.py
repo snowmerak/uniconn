@@ -138,3 +138,104 @@ async def test_e2ee_ws_echo():
         await secure_conn.close()
     finally:
         _kill_server(proc)
+
+
+JS_DIR = os.path.join(REPO_ROOT, "uniconn-js")
+TESTS_DIR = os.path.dirname(os.path.abspath(__file__))
+
+
+def _spawn_go_secure_server_for_node():
+    """Spawn Go secure crosstest server, returning info before feeding peer FP.
+
+    Returns (proc, tcp_port, ws_port, server_fp_hex).
+    """
+    proc = subprocess.Popen(
+        ["go", "run", "./secure/crosstest/server"],
+        cwd=GO_DIR,
+        stdin=subprocess.PIPE,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+        creationflags=subprocess.CREATE_NEW_PROCESS_GROUP if os.name == "nt" else 0,
+    )
+
+    deadline = time.time() + 60
+    info = None
+    while time.time() < deadline:
+        line = proc.stdout.readline().strip()
+        if line:
+            try:
+                info = json.loads(line)
+                break
+            except json.JSONDecodeError:
+                continue
+
+    if info is None:
+        proc.kill()
+        stderr = proc.stderr.read()
+        raise RuntimeError(f"Go secure server did not produce info.\nstderr: {stderr}")
+
+    return proc, info["port"], info["wsPort"], info["fingerprint"]
+
+
+def test_e2ee_node_tcp_echo():
+    """Node.js E2EE TCP client → Go secure crosstest server."""
+    go_proc, tcp_port, ws_port, server_fp_hex = _spawn_go_secure_server_for_node()
+    node_proc = None
+    try:
+        # Start Node.js E2EE client.
+        node_proc = subprocess.Popen(
+            ["node", os.path.join(TESTS_DIR, "node_e2ee_client.mjs"),
+             "127.0.0.1", str(tcp_port), server_fp_hex],
+            cwd=JS_DIR,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+            creationflags=subprocess.CREATE_NEW_PROCESS_GROUP if os.name == "nt" else 0,
+        )
+
+        # Read Node's fingerprint from its first JSON line.
+        deadline = time.time() + 30
+        node_fp_hex = None
+        while time.time() < deadline:
+            line = node_proc.stdout.readline().strip()
+            if line:
+                try:
+                    node_info = json.loads(line)
+                    node_fp_hex = node_info["fingerprint"]
+                    break
+                except (json.JSONDecodeError, KeyError):
+                    continue
+
+        assert node_fp_hex is not None, "Node client did not produce fingerprint"
+
+        # Feed Node's fingerprint to Go server.
+        go_proc.stdin.write(node_fp_hex + "\n")
+        go_proc.stdin.flush()
+
+        # Wait for Node to complete.
+        node_proc.wait(timeout=30)
+        remaining_output = node_proc.stdout.read()
+
+        # Parse result.
+        result = None
+        for line in remaining_output.strip().split("\n"):
+            line = line.strip()
+            if line:
+                try:
+                    result = json.loads(line)
+                except json.JSONDecodeError:
+                    continue
+
+        assert result is not None, (
+            f"Node E2EE client did not produce result.\n"
+            f"stderr: {node_proc.stderr.read()}"
+        )
+        assert result.get("match") is True, f"Echo mismatch: {result}"
+        assert node_proc.returncode == 0, f"Node exited with {node_proc.returncode}"
+    finally:
+        _kill_server(go_proc)
+        if node_proc and node_proc.poll() is None:
+            node_proc.kill()
+            node_proc.wait(timeout=5)
+

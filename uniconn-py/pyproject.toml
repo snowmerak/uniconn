@@ -10,6 +10,9 @@ dependencies = [
     "blake3>=1.0",
     "websockets>=16.0",
     "argon2-cffi>=23.1",
+    "dilithium-py",
+    "pqcrypto",
+    "aiohttp>=3.9",
 ]
 
 [project.optional-dependencies]
@@ -23,6 +26,8 @@ dev = [
     "pytest>=8.0",
     "pytest-asyncio>=1.0",
     "cryptography>=42.0",
+    "kcp>=0.1.6",
+    "aioquic>=1.0",
 ]
 
 [build-system]

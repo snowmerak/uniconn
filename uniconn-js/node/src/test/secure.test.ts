@@ -65,7 +65,11 @@ describe("USCP E2EE (Node ??Node)", () => {
     const addr = server.address() as net.AddressInfo;
 
     server.once("connection", async (socket) => {
-      try { await handshakeResponder(new TcpConn(socket), bob, aliceFP, nodeVerify); } catch {}
+      try { 
+        await handshakeResponder(new TcpConn(socket), bob, aliceFP, nodeVerify); 
+      } catch {
+        socket.destroy();
+      }
     });
 
     const aliceSocket = net.createConnection(addr.port, "127.0.0.1");
@@ -75,6 +79,7 @@ describe("USCP E2EE (Node ??Node)", () => {
       () => handshakeInitiator(new TcpConn(aliceSocket), alice, eveFP, nodeVerify),
       { message: /fingerprint mismatch/ },
     );
+    aliceSocket.destroy();
     server.close();
   });
 

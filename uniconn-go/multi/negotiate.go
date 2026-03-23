@@ -17,13 +17,15 @@ type ProtocolEntry struct {
 type NegotiateResponse struct {
 	// Protocols lists all available protocols on this server.
 	Protocols []ProtocolEntry `json:"protocols"`
+	// Fingerprint is the optional ML-DSA identity fingerprint of the server.
+	Fingerprint string `json:"fingerprint,omitempty"`
 }
 
 // NegotiateHandler returns an http.HandlerFunc that serves the negotiate
 // response as JSON. The handler responds with 200 OK and Content-Type
 // application/json.
-func NegotiateHandler(entries []ProtocolEntry) http.HandlerFunc {
-	resp := NegotiateResponse{Protocols: entries}
+func NegotiateHandler(entries []ProtocolEntry, fingerprint string) http.HandlerFunc {
+	resp := NegotiateResponse{Protocols: entries, Fingerprint: fingerprint}
 	body, _ := json.Marshal(resp)
 
 	return func(w http.ResponseWriter, r *http.Request) {

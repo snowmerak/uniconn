@@ -75,7 +75,7 @@ func NewMultiListener(negotiateAddr string, transports ...TransportConfig) (*Mul
 	ml.negotiateAddr = ln.Addr()
 
 	mux := http.NewServeMux()
-	mux.HandleFunc("/negotiate", NegotiateHandler(entries))
+	mux.HandleFunc("/negotiate", NegotiateHandler(entries, ""))
 
 	ml.negotiateSrv = &http.Server{Handler: mux}
 	go func() {

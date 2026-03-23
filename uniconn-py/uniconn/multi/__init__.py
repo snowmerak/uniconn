@@ -40,14 +40,18 @@ class ProtocolEntry:
 class NegotiateResponse:
     """JSON response from the /negotiate endpoint."""
     protocols: list[ProtocolEntry]
+    fingerprint: str | None = None
 
     def to_json(self) -> str:
-        return json.dumps({
+        d = {
             "protocols": [
                 {"name": p.name, "address": p.address}
                 for p in self.protocols
             ]
-        })
+        }
+        if self.fingerprint is not None:
+            d["fingerprint"] = self.fingerprint
+        return json.dumps(d)
 
     @classmethod
     def from_json(cls, data: str) -> "NegotiateResponse":
@@ -55,8 +59,9 @@ class NegotiateResponse:
         return cls(
             protocols=[
                 ProtocolEntry(name=p["name"], address=p["address"])
-                for p in obj["protocols"]
-            ]
+                for p in obj.get("protocols", [])
+            ],
+            fingerprint=obj.get("fingerprint")
         )
 
 
@@ -162,13 +167,14 @@ class MultiListener:
             task = asyncio.create_task(self._accept_loop(t))
             self._tasks.append(task)
 
-    def get_negotiate_response(self) -> NegotiateResponse:
+    def get_negotiate_response(self, fingerprint: str | None = None) -> NegotiateResponse:
         """Build the negotiate response from configured transports."""
         return NegotiateResponse(
             protocols=[
                 ProtocolEntry(name=t.protocol, address=t.address)
                 for t in self._transports
-            ]
+            ],
+            fingerprint=fingerprint
         )
 
     async def accept(self) -> Conn:

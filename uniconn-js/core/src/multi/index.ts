@@ -33,6 +33,7 @@ export interface ProtocolEntry {
 /** JSON response from the /negotiate endpoint. */
 export interface NegotiateResponse {
   protocols: ProtocolEntry[];
+  fingerprint?: string;
 }
 
 /** Default per-protocol dial timeout in ms. */
@@ -171,8 +172,10 @@ export class MultiListener {
   }
 
   /** Get the full NegotiateResponse JSON object. */
-  getNegotiateResponse(): NegotiateResponse {
-    return { protocols: this.getNegotiateEntries() };
+  getNegotiateResponse(fingerprint?: string): NegotiateResponse {
+    const resp: NegotiateResponse = { protocols: this.getNegotiateEntries() };
+    if (fingerprint) resp.fingerprint = fingerprint;
+    return resp;
   }
 
   /** Accept the next connection from any protocol. */

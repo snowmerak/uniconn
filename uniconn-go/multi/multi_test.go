@@ -26,7 +26,7 @@ func TestNegotiateHandler(t *testing.T) {
 		{Name: multi.ProtoWebSocket, Address: "ws://server:8002/ws"},
 	}
 
-	handler := multi.NegotiateHandler(entries)
+	handler := multi.NegotiateHandler(entries, "")
 	req := httptest.NewRequest(http.MethodGet, "/negotiate", nil)
 	rec := httptest.NewRecorder()
 	handler(rec, req)
@@ -52,7 +52,7 @@ func TestNegotiateHandler(t *testing.T) {
 }
 
 func TestNegotiateHandlerRejectsPost(t *testing.T) {
-	handler := multi.NegotiateHandler(nil)
+	handler := multi.NegotiateHandler(nil, "")
 	req := httptest.NewRequest(http.MethodPost, "/negotiate", nil)
 	rec := httptest.NewRecorder()
 	handler(rec, req)
@@ -199,7 +199,7 @@ func TestMultiDialerFallback(t *testing.T) {
 	fakeNeg := httptest.NewServer(multi.NegotiateHandler([]multi.ProtocolEntry{
 		{Name: multi.ProtoWebSocket, Address: "ws://127.0.0.1:" + closedPort + "/ws"},
 		{Name: multi.ProtoTCP, Address: tcpLn.Addr().String()},
-	}))
+	}, ""))
 	defer fakeNeg.Close()
 
 	md := multi.NewMultiDialer(multi.DialerConfig{

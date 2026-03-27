@@ -1,372 +1,87 @@
-# uniconn Secure Channel Protocol (USCP) v1
+# Uniconn Protocol Specification
 
-## Abstract
+The **Uniconn** protocol establishes cross-runtime End-to-End Encrypted (E2EE) data tunnels using dynamic proxy relays. It relies on multi-layer handshakes to securely bridge Node endpoints regardless of NAT configuration.
 
-이 문서는 uniconn 라이브러리의 E2EE(End-to-End Encryption) 프로토콜을 정의합니다.
-USCP는 임의의 바이트 스트림 전송 레이어(TCP, WebSocket, QUIC, WebTransport, KCP)
-위에서 동작하며, 중간 릴레이/프록시 노드가 존재해도 종단 간 기밀성, 무결성, 인증을
-보장합니다.
+## 1. Topologies
 
-이 규격은 언어에 독립적이며, 이 문서만으로 호환 구현체를 작성할 수 있도록
-바이트 레벨의 와이어 포맷과 절차를 명시합니다.
+1.  **Node**: A logical client (Initiator or Responder). Each Node constructs an ML-DSA-87 identity fingerprint (2592-byte `publicKeyRaw` hashing to a 64-byte Fingerprint, formatted as a 128-char hex string).
+2.  **Relay (Router)**: Go-based servers that expose multiple inbound listening endpoints (TCP, WS, KCP, HTTP). Relays interconnect forming a loosely coupled Mesh Federation that routes proxy connections payload-agnostically.
 
----
+## 2. Multi-Transport Negotiation (`/negotiate`)
 
-## 1. 용어 정의
+Heterogeneous runtimes might only natively support a subset of protocols (e.g., Web Browser -> WebSockets only; Go -> TCP/KCP; Node.js -> TCP). Uniconn handles this transparently using an HTTP Negotiation scheme.
 
-| 용어 | 의미 |
-|---|---|
-| **Initiator** | 핸드셰이크를 시작하는 측 (연결을 건 클라이언트) |
-| **Responder** | 핸드셰이크에 응답하는 측 (연결을 받는 서버) |
-| **Relay** | Initiator ↔ Responder 사이에서 바이트를 중계하는 노드 |
-| **Identity** | ML-DSA-87 키쌍 (공개키 + 비밀키) |
-| **Fingerprint** | BLAKE3(공개키, 64바이트) — 사전에 교환하는 신원 식별자 |
+### Sequence:
+1.  **Initiator/Node HTTP request**: `GET http://<relay-address>:<negotiate_port>/negotiate`
+2.  **Relay Response** (JSON Array): Lists live `multi.ProtocolEntry`. 
 
----
-
-## 2. 암호 프리미티브
-
-### 2.1. 디지털 서명: ML-DSA-87
-
-- 규격: NIST FIPS 204
-- 보안 레벨: 5 (256비트 고전 보안)
-- 공개키 크기: 2592 바이트
-- 비밀키 크기: 4896 바이트
-- 서명 크기: 4627 바이트
-
-### 2.2. 키 캡슐화: ML-KEM-1024
-
-- 규격: NIST FIPS 203
-- 보안 레벨: 5 (256비트 고전 보안)
-- 캡슐화키(ek) 크기: 1568 바이트
-- 복호화키(dk) 크기: 3168 바이트
-- 암호문(ct) 크기: 1568 바이트
-- 공유 비밀(ss) 크기: 32 바이트
-
-### 2.3. 해시/KDF: BLAKE3
-
-- 출력 길이: 가변 (핑거프린트 64바이트, KDF 88바이트)
-- 키 유도 시 `DeriveKey` 모드 사용 (context string 기반)
-
-### 2.4. AEAD 암호화: XChaCha20-Poly1305
-
-- 키 크기: 32 바이트
-- Nonce 크기: 24 바이트
-- 태그 크기: 16 바이트
-
----
-
-## 3. 핑거프린트
-
-### 3.1. 생성
-
-```
-fingerprint = BLAKE3(mldsa87_public_key, output_length=64)
+```json
+[
+  {"protocol": "tcp", "address": "127.0.0.1:10011"},
+  {"protocol": "kcp", "address": "127.0.0.1:10012"},
+  {"protocol": "websocket", "address": "127.0.0.1:10002"}
+]
 ```
 
-입력: ML-DSA-87 공개키의 원시 바이트 (2592 바이트)
-출력: 64바이트 (512비트)
+3.  The caller's `MultiDialer` iterates matching known protocol priorities (e.g., TCP > WS > KCP) against the server offerings and completes the physical socket dial.
 
-### 3.2. 교환
+## 3. End-to-End Encryption Frame (E2EE Handshake)
 
-핑거프린트는 **Out-of-Band** 채널로 사전 교환합니다.
-예: QR코드, 메신저, 직접 전달.
+After physical connections (TCP, WS, etc.) succeed, the E2EE Handshake occurs immediately to exchange temporary cryptographic streams before any JSON logic is injected. Uniconn employs ML-DSA signatures.
 
-핸드셰이크 시 수신한 공개키의 BLAKE3 해시가 사전에 보유한 핑거프린트와
-일치하는지 검증합니다. 불일치 시 즉시 연결을 종료합니다.
+1.  **Client (Initiator)** `secure.HandshakeInitiator`:
+    *   Generates Ephemeral KeyPair / Nonces.
+    *   Initiate Diffie-Hellman / Key Encapsulation (Kyber).
+    *   Authenticates with ML-DSA-87 Identity PrivateKey (`sign`).
+    *   Transmits `ClientHello`.
+2.  **Server/Peer (Responder)** `secure.HandshakeResponder`:
+    *   Receives `ClientHello`, validates ML-DSA signature against `publicKeyRaw`.
+    *   Replies with `ServerHello` authenticating back.
+3.  **Encrypted Tunnel Bound**: The connection upgrades to a `SecureConn` implementing the standard I/O stream interface. All subsequent payloads are ChaCha20-Poly1305 encrypted.
 
----
+*(Note: During `Relay <-> Node` connections, since the Relay operates purely in a pass-through manner for P2P routing, it utilizes an `<AnyFingerprint>` bypass configuration because it does not strictly need to authenticate public anonymous Nodes joining the mesh, unless specifically constrained).*
 
-## 4. 핸드셰이크
+## 4. Control Frame Format (JSON Envelopes)
 
-### 4.1. 개요
+Upon E2EE binding, Uniconn multiplexes control traffic utilizing Newline-delimited JSON (`\n` framing). All nodes natively parse arbitrary structs into the `Envelope` interface:
 
-```
-Initiator                Relay              Responder
-    │                      │                      │
-    │──── HELLO ──────────►│──── 중계 ───────────►│
-    │                      │                      │
-    │◄─── HELLO_REPLY ─────│◄─── 중계 ────────────│
-    │                      │                      │
-    │       (키 유도)       │       (키 유도)       │
-    │                      │                      │
-    │═══ 암호화 터널 ═══════│═══ 바이트 중계 ══════│
-```
-
-### 4.2. Initiator 절차
-
-1. Ephemeral ML-KEM-1024 키쌍 생성: `(ek, dk)`
-2. `ek`를 자신의 ML-DSA-87 비밀키로 서명: `sig = MLDSA87.Sign(sk, ek)`
-3. HELLO 메시지 전송: `{pubkey, ek, sig}`
-4. HELLO_REPLY 수신 대기
-5. Responder 공개키의 핑거프린트 검증
-6. Responder의 서명 검증: `MLDSA87.Verify(responder_pubkey, sig, ct)`
-7. ML-KEM 복호: `shared_secret = MLKEM1024.Decaps(dk, ct)`
-8. 키 유도 (§5)
-
-### 4.3. Responder 절차
-
-1. HELLO 수신
-2. Initiator 공개키의 핑거프린트 검증
-3. 서명 검증: `MLDSA87.Verify(initiator_pubkey, sig, ek)`
-4. ML-KEM 캡슐화: `(ct, shared_secret) = MLKEM1024.Encaps(ek)`
-5. `ct`를 자신의 ML-DSA-87 비밀키로 서명: `sig = MLDSA87.Sign(sk, ct)`
-6. HELLO_REPLY 전송: `{pubkey, ct, sig}`
-7. 키 유도 (§5)
-
-### 4.4. 오류 처리
-
-핸드셰이크 중 다음 조건에서 연결을 즉시 종료해야 합니다 (MUST):
-
-- 핑거프린트 불일치
-- 서명 검증 실패
-- ML-KEM 복호 실패
-- 메시지 포맷 오류
-- 핸드셰이크 타임아웃 (구현체가 정의, 권장 10초)
-
----
-
-## 5. 키 유도
-
-### 5.1. 절차
-
-```
-keys = BLAKE3.DeriveKey(
-    context  = "uniconn-e2ee-v1",
-    material = shared_secret,        // 32바이트 (ML-KEM-1024 출력)
-    output_length = 88
-)
+```json
+{
+  "type": "MESSAGE_TYPE_STRING",
+  "payload": { ... } // arbitrary runtime-dependent object context
+}
 ```
 
-### 5.2. 키 분배
+*In Go, `payload` is designated as `json.RawMessage` allowing late binding.*
 
-```
-바이트 오프셋     용도                  크기
-────────────────────────────────────────
-[0:32]           initiator_key         32바이트
-[32:64]          responder_key         32바이트
-[64:76]          initiator_nonce_pfx   12바이트
-[76:88]          responder_nonce_pfx   12바이트
-```
+## 5. Gossip & Routing Metadata
 
-- `initiator_key`: Initiator → Responder 방향 암호화 키
-- `responder_key`: Responder → Initiator 방향 암호화 키
-- `*_nonce_pfx`: 각 방향의 nonce 24바이트 중 앞 12바이트
+Public Relays act as directories mapping `TargetFingerprint -> RelayPhysicalEndpoint`.
 
-### 5.3. BLAKE3 DeriveKey 모드
+*   **`ANNOUNCE`**: Sent by a Node upon connection. Instructs its connected Relay to associate `controlConn` with its `Fingerprint`.
+*   **`GOSSIP_UPDATE`**: Triggered when a Relay receives an `ANNOUNCE`. The Relay broadcasts an asynchronous JSON Envelope:
+    `{"type": "GOSSIP_UPDATE", "payload": {"fingerprint": "xyz...", "relay_address": "R1:Port", "timestamp": 123...}}`
+*   All peering Relays update their `globalRouting[Fingerprint]` cache based on timestamps.
 
-BLAKE3의 `DeriveKey` 모드는 `context` 문자열을
-도메인 분리에 사용합니다. `context`는 반드시 `"uniconn-e2ee-v1"` 이어야 합니다 (MUST).
-프로토콜 버전이 변경되면 이 문자열이 변경됩니다.
+## 6. Two-Hop Dumb Pipe Tunneling Flow
 
----
+When Node A dictates traffic for Node B.
 
-## 6. 데이터 전송
-
-### 6.1. Nonce 구조 (24바이트)
-
-```
-바이트 오프셋   필드              크기       설명
-───────────────────────────────────────────────────
-[0:12]         nonce_prefix      12바이트   키 유도에서 획득 (§5.2)
-[12:16]        timestamp         4바이트    uint32, big-endian, Unix epoch 초
-[16:24]        counter           8바이트    uint64, big-endian, 0부터 시작
-```
-
-- `nonce_prefix`는 방향에 따라 `initiator_nonce_pfx` 또는 `responder_nonce_pfx`를 사용
-- `timestamp`는 메시지 전송 시점의 Unix 시간
-- `counter`는 해당 방향에서 전송한 DATA 메시지 수 (0부터)
-- 동일한 nonce를 재사용하면 안 됩니다 (MUST NOT)
-
-### 6.2. 암호화
-
-```
-ciphertext = XChaCha20Poly1305.Seal(
-    key       = direction_key,       // initiator_key 또는 responder_key
-    nonce     = nonce,               // 24바이트 (§6.1)
-    plaintext = payload,
-    aad       = []                   // 추가 인증 데이터 없음
-)
-```
-
-- `ciphertext`는 `len(plaintext) + 16` 바이트 (16B Poly1305 태그 포함)
-
-### 6.3. 복호화
-
-- 수신 측은 nonce에서 `timestamp`를 추출하여 **현재 시각 대비 ±N초 이내**인지
-  검증할 수 있습니다 (SHOULD). N은 구현체가 결정합니다 (권장: 300초).
-- 수신 측은 `counter`가 이전에 수신한 값보다 큰지 검증할 수 있습니다 (SHOULD).
-- AEAD 태그 검증 실패 시 메시지를 폐기합니다 (MUST).
-
----
-
-## 7. 와이어 포맷
-
-모든 정수는 **big-endian**으로 인코딩합니다.
-모든 가변 길이 필드는 `[2B length][data]` 형식입니다.
-
-### 7.1. 메시지 프레이밍
-
-전송 레이어가 메시지 경계를 보장하지 않을 수 있으므로 (예: TCP),
-모든 USCP 메시지는 다음 프레임으로 감싸야 합니다 (MUST):
-
-```
-[4B total_length] [message_body]
-```
-
-- `total_length`: `message_body`의 바이트 수 (uint32, big-endian)
-- 최대 메시지 크기: 16,777,216 바이트 (16MB)
-
-### 7.2. HELLO (type = 0x01)
-
-```
-offset  size      field
-──────────────────────────────────
-0       1         type = 0x01
-1       2         pubkey_len
-3       var       mldsa87_public_key
-var     2         ek_len
-var     var       mlkem1024_encapsulation_key
-var     2         sig_len
-var     var       mldsa87_signature(mlkem1024_ek)
-```
-
-### 7.3. HELLO_REPLY (type = 0x02)
-
-```
-offset  size      field
-──────────────────────────────────
-0       1         type = 0x02
-1       2         pubkey_len
-3       var       mldsa87_public_key
-var     2         ct_len
-var     var       mlkem1024_ciphertext
-var     2         sig_len
-var     var       mldsa87_signature(mlkem1024_ct)
-```
-
-### 7.4. DATA (type = 0x03)
-
-```
-offset  size      field
-──────────────────────────────────
-0       1         type = 0x03
-1       4         timestamp (uint32 big-endian, Unix epoch 초)
-5       8         counter   (uint64 big-endian)
-13      var       ciphertext (plaintext + 16B Poly1305 태그)
-```
-
-> [!NOTE]
-> DATA 메시지에는 `nonce_prefix`가 포함되지 않습니다.
-> 수신 측은 §5.2에서 유도한 상대방의 `nonce_prefix`를 이미 보유하고 있으므로,
-> `timestamp`와 `counter`를 결합하여 full nonce를 재구성합니다.
-
-### 7.5. ERROR (type = 0xFF)
-
-```
-offset  size      field
-──────────────────────────────────
-0       1         type = 0xFF
-1       2         reason_len
-3       var       reason (UTF-8 문자열)
-```
-
-ERROR 전송 후 연결을 즉시 종료해야 합니다 (MUST).
-
----
-
-## 8. 보안 속성
-
-| 속성 | 보장 메커니즘 |
-|---|---|
-| **기밀성** | XChaCha20-Poly1305 AEAD |
-| **무결성** | Poly1305 MAC (16바이트 태그) |
-| **인증** | ML-DSA-87 서명 + BLAKE3 핑거프린트 |
-| **Forward Secrecy** | Ephemeral ML-KEM-1024 키쌍 (매 세션) |
-| **양자 저항** | ML-DSA-87 + ML-KEM-1024 (NIST 레벨 5) |
-| **MITM 방지** | 사전 교환 핑거프린트로 공개키 검증 |
-| **Replay 방지** | timestamp + counter nonce, AEAD 태그 |
-| **Nonce 재사용 방지** | prefix(방향별) + timestamp + counter |
-
----
-
-## 9. 프로토콜 상수
-
-```
-USCP_VERSION            = 1
-BLAKE3_FINGERPRINT_LEN  = 64
-BLAKE3_KDF_OUTPUT_LEN   = 88
-BLAKE3_KDF_CONTEXT      = "uniconn-e2ee-v1"
-XCHACHA20_NONCE_LEN     = 24
-XCHACHA20_TAG_LEN       = 16
-MAX_MESSAGE_SIZE        = 16777216
-MSG_HELLO               = 0x01
-MSG_HELLO_REPLY         = 0x02
-MSG_DATA                = 0x03
-MSG_ERROR               = 0xFF
-```
-
----
-
-## 10. 구현 참조
-
-### 10.1. Go
-
-| 기능 | 패키지 |
-|---|---|
-| ML-KEM-1024 | `crypto/mlkem` (Go 1.24 stdlib) |
-| ML-DSA-87 | `github.com/cloudflare/circl/sign/mldsa/mldsa87` |
-| BLAKE3 | `lukechampine.com/blake3` |
-| XChaCha20-Poly1305 | `golang.org/x/crypto/chacha20poly1305` |
-
-### 10.2. Node.js (≥ 25)
-
-| 기능 | 패키지 |
-|---|---|
-| ML-KEM-1024 | `mlkem` |
-| ML-DSA-87 | `node:crypto` (OpenSSL 내장) |
-| BLAKE3 | `@noble/hashes/blake3` |
-| XChaCha20-Poly1305 | `@stablelib/xchacha20poly1305` |
-
-### 10.3. 브라우저
-
-| 기능 | 패키지 |
-|---|---|
-| ML-KEM-1024 | `mlkem` |
-| ML-DSA-87 | `@noble/post-quantum/ml-dsa` (순수 JS) |
-| BLAKE3 | `@noble/hashes/blake3` |
-| XChaCha20-Poly1305 | `@stablelib/xchacha20poly1305` |
-
-### 10.4. 기타 언어
-
-ML-DSA-87 (FIPS 204), ML-KEM-1024 (FIPS 203)를 구현하는
-라이브러리가 있는 언어에서 이 프로토콜을 구현할 수 있습니다.
-호환성 테스트는 §7의 와이어 포맷을 기준으로 수행합니다.
-
----
-
-## 11. P2P 시그널링 계층 (USCP-P2P Extension)
-
-P2P 레이어는 **USCP v1 E2EE 터널 상단에서 구동되는 JSON 기반 제어 프로토콜**입니다. 
-모든 패킷은 Node와 Relay 간 완성된보안 통신망을 통해 JSON 문자열(`\n` 종료자 포함) 형태로 교환됩니다. Relay 서버는 Public 용도이므로 USCP 핸드셰이크 시 `AnyFingerprint(0x00...00)`를 허용해야 합니다.
-
-### 11.1. 제어 메시지 (MsgType)
-
-| 타입 | 방향 | 설명 |
-|---|---|---|
-| `ANNOUNCE` | Node → Relay | 자신의 `fingerprint`, 가용 주소(`direct_addresses`) 및 지원 스택 선언 |
-| `FIND_PEER` | Node → Relay | 대상의 `target_fingerprint`를 기반으로 직접 연결 가능한 메타 정보 조회 |
-| `FOUND_PEER` | Relay → Node | `FIND_PEER`에 대한 응답 반환 |
-| `RELAY_REQ` | Node → Relay | Relay 서버에게 중계(Dumb Pipe) 프록시 연결 수립 요청 |
-| `INCOMING_RELAY` | Relay → Node(Target) | 대상 피어의 Control Conn으로 `session_token` 전송, 다이얼백 유도 |
-| `ACCEPT_RELAY` | Node(Target) → Relay | `session_token`과 함께 Relay의 새 프록시 스트림 묶음 요청 응답 |
-| `RELAY_ACK` | Relay → Node(Req) | 프록시가 완성(Target 접속 완료)되었음을 통보 `{"success": true}` |
-
-### 11.2. 중첩 E2EE (Nested E2EE) 라우팅
-
-1. Node **A** 가 Relay **R** 에 `RELAY_REQ` 요청. (A-R 간 USCP 암호화 중).
-2. Relay **R** 이 Target **B** 의 제어 커넥션으로 `INCOMING_RELAY(Token)` 발송.
-3. Node **B** 가 Relay **R** 로 새로운 커넥션을 맺고 `ACCEPT_RELAY`로 Token 응답.
-4. Relay **R** 은 즉시 해당 제어 로직을 종료하고, A의 커넥션과 B의 신규 커넥션을 **원시 바이트(Dumb Pipe) 레벨에서 단순 복사(`io.Copy`)** 모드로 차단 없이 중계합니다.
-5. 이후 Node **A** 와 Node **B** 는 연결된 파이프를 통해 서로 상대방의 Fingerprint를 이용한 **2차 USCP 핸드셰이크(Nested E2EE)** 를 개시합니다.
-6. 이로써 릴레이 노드(R)는 Payload를 해독할 수 없고, A와 B는 완전한 종단간 기밀성을 누리게 됩니다.
+1.  **Node A** forms the P2P intent by writing `RELAY_REQ` targeting Node B’s Fingerprint to its upstream Relay (R_A).
+2.  **Relay A**:
+    *   Reads `RELAY_REQ`. Checks its `activeNodes` cache.
+    *   If Node B is connected to Relay A, skip to Step 5.
+    *   Otherwise, consults `globalRouting` table for Node B. It finds Node B is connected to Relay B.
+3.  **Relay A -> Relay B (Inter-Relay Hop)**:
+    *   Relay A dials Relay B (using physical negotiation TCP/KCP).
+    *   Relay A issues an internal envelope: `RELAY_INTERNAL_REQ` carrying `SourceFingerprint=Node A` and `TargetFingerprint=Node B`.
+4.  **Relay B -> Node B**:
+    *   Relay B correlates `TargetFingerprint` to Node B's active control socket.
+    *   Relay B issues `INCOMING_RELAY` specifying the unique `SessionToken` identifying Relay A's connection waiting-tube.
+5.  **Node B -> Relay B Validation**:
+    *   Node B provisions a *brand new connection socket* back to Relay B.
+    *   Node B executes the secure handshake and sends `ACCEPT_RELAY` quoting the `SessionToken`.
+6.  **Splicing**:
+    *   Relay B splices (via `io.Copy`) the new connection from Node B back down the waiting `RELAY_INTERNAL_REQ` tunnel from Relay A.
+    *   Relay A routes the response payload back to Node A with a `RELAY_ACK`.
+7.  **Data Pump**: All relays relinquish the envelope parsers. The connection becomes a direct byte pipe strictly shuttling opaque `SecureConn` streams. Node A and Node B can now conduct a *secondary layered P2P E2EE Handshake* exclusively over the relay proxy.

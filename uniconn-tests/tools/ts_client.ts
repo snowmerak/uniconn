@@ -1,8 +1,9 @@
-import { Node, DefaultNodeConfig, Fingerprint } from '../uniconn-js/core/src/p2p/index.js';
-import { NodeIdentity } from '../uniconn-js/core/src/secure/identity.node.js';
-import { nodeVerify } from '../uniconn-js/core/src/secure/identity.node.js';
-import { TCPDialer } from '../uniconn-js/node/src/tcp/dialer.js';
-import * as readline from 'readline';
+import { Node, DefaultNodeConfig } from '../../uniconn-js/core/src/p2p/index.ts';
+import { NodeIdentity, nodeVerify } from '../../uniconn-js/node/src/secure/identity.ts';
+import { TcpDialer } from '../../uniconn-js/node/src/tcp/dialer.ts';
+import * as process from 'node:process';
+import { Buffer } from 'node:buffer';
+import * as readline from 'node:readline';
 
 async function main() {
   const args = process.argv.slice(2);
@@ -16,8 +17,8 @@ async function main() {
     if (args[i] === '--role') role = args[++i];
   }
 
-  const id = new NodeIdentity();
-  const dialer = new TCPDialer();
+  const id = NodeIdentity.generate();
+  const dialer = new TcpDialer();
   const node = new Node(DefaultNodeConfig, id, nodeVerify, dialer);
 
   const relayFp = Buffer.alloc(64);

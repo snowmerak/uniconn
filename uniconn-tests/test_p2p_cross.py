@@ -30,7 +30,7 @@ def read_and_echo(proc, prefix, result_dict, log_file):
 
 async def main():
     print("=== Starting Federation Mesh ===")
-    r1, r2, r3, py_node, go_node = None, None, None, None, None
+    r1, r2, r3, py_node, go_node, ts_node = None, None, None, None, None, None
     try:
         # R1: TCP + WS
         r1 = subprocess.Popen(["go", "run", "../uniconn-tests/tools/relay.go", "-tcp=127.0.0.1:10001", "-ws=127.0.0.1:10002", "-neg=127.0.0.1:19001"], stdout=subprocess.PIPE, text=True, cwd="../uniconn-go")
@@ -53,9 +53,9 @@ async def main():
         await asyncio.sleep(1) # Let mesh stabilize
         print("\n=== Connecting Clients ===")
 
-        # 1. Python Client (Initiator targeting Go, Connected to R3 TCP)
+        # 1. Python Client (Responder, Connected to R3 TCP)
         uv_cmd = "uv.exe" if os.name == "nt" else "uv"
-        py_node = subprocess.Popen([uv_cmd, "run", "python", "../uniconn-tests/tools/py_client.py", "--relay", "127.0.0.1:10021", "--relay-fp", r3_info['fingerprint'], "--role", "initiator"], stdout=subprocess.PIPE, stdin=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, cwd="../uniconn-py")
+        py_node = subprocess.Popen([uv_cmd, "run", "python", "../uniconn-tests/tools/py_client.py", "--relay", "127.0.0.1:10021", "--relay-fp", r3_info['fingerprint'], "--role", "responder"], stdout=subprocess.PIPE, stdin=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, cwd="../uniconn-py")
         py_info = {}
         threading.Thread(target=read_and_echo, args=(py_node, "PY", py_info, "py.log"), daemon=True).start()
         await asyncio.sleep(0.5)
@@ -72,18 +72,31 @@ async def main():
         go_fp = go_info['fingerprint']
         print(f"[Go Client] Connected to R2 (KCP). fp={go_fp}")
 
+        # 3. TS Client (Initiator targeting Py & Go, Connected to R1 TCP)
+        npx_cmd = "npx.cmd" if os.name == "nt" else "npx"
+        ts_node = subprocess.Popen([npx_cmd, "tsx", "tools/ts_client.ts", "--relay", "127.0.0.1:10001", "--relay-fp", r1_info['fingerprint'], "--role", "initiator"], stdout=subprocess.PIPE, stdin=subprocess.PIPE, stderr=subprocess.STDOUT, text=True)
+        ts_info = {}
+        threading.Thread(target=read_and_echo, args=(ts_node, "TS", ts_info, "ts.log"), daemon=True).start()
+        # Wait until we have ts_fp
+        while not ts_info.get('fingerprint'):
+            await asyncio.sleep(0.1)
+        ts_fp = ts_info['fingerprint']
+        print(f"[TS Client] Connected to R1 (TCP). fp={ts_fp}")
+
         await asyncio.sleep(1) # Wait for Gossip to propagate
 
         print("\n=== Executing Cross-Language E2EE Tunneling ===")
         
-        # Python -> Go
-        print(f"> Instructing Py Client to dial Go ({go_fp[:8]}...)")
-        py_node.stdin.write(go_fp + "\n")
-        py_node.stdin.flush()
+        # TS -> Python
+        print(f"> Instructing TS Client to dial Py ({py_fp[:8]}...)")
+        ts_node.stdin.write(py_fp + "\n")
+        ts_node.stdin.flush()
 
         await asyncio.sleep(5)
         if "msg_received" in str(py_info):
-            print("✅ Python -> Go 2-Hop KCP/TCP E2EE Success!")
+            print("✅ TS -> Py 2-Hop TCP E2EE Success!")
+        if "msg_received" in str(ts_info):
+            print("✅ Py -> TS PONG Success!")
 
         print("\n=== Web Browser Test Instruction ===")
         print("To test browser interactions:")
@@ -102,6 +115,7 @@ async def main():
         if r3: r3.kill()
         if py_node: py_node.kill()
         if go_node: go_node.kill()
+        if ts_node: ts_node.kill()
         if os.name == "nt":
             subprocess.run(["taskkill", "/f", "/im", "relay.exe"], capture_output=True)
             subprocess.run(["taskkill", "/f", "/im", "go_client.exe"], capture_output=True)

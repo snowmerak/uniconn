@@ -8,3 +8,9 @@ uniconn-py/.pytest_cache
 *.pyc
 *.pyo
 *.pyd
+
+# Test Logs & Temporaries
+*.log
+err.txt
+out.txt
+tmp.exe

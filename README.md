@@ -98,6 +98,8 @@ main();
     *   `browser/`: WebCrypto API integration and Browser WebSocket support.
 *   `uniconn-py/`: Complete Python `asyncio` client with `cryptography` integration.
 *   `uniconn-tests/`: Cross-Language integration meshes and protocol verification logic.
+    *   `runners/run_p2p_cross.py`: E2EE Mesh verification script covering Go, Node.js, and Python.
+    *   `web/pw.mjs`: Playwright End-to-End WebSocket tunneling automation test against a local Vite Dev Server.
 *   `PROTOCOL.md`: Specific low-level architecture, JSON envelope schema, and routing flow.
 
 ## License

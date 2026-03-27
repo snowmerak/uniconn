@@ -98,6 +98,8 @@ main();
     *   `browser/`: WebCrypto API 통합 및 웹 브라우저 환경 전용 WebSocket 연결.
 *   `uniconn-py/`: `cryptography` 라이브러리를 적용한 풀-스케일 Python `asyncio` 클라이언트.
 *   `uniconn-tests/`: 언어 런타임 간 크로스-테스트 실행(`runners`) 스크립트 모음 및 프로토콜 검증 로직.
+    *   `runners/run_p2p_cross.py`: Go, Node.js, Python 런타임을 관통하는 E2EE Mesh 통합 검증 스크립트.
+    *   `web/pw.mjs`: Playwright 기반으로 동작하는 브라우저 환경 종단 간(Vite Dev Server) WebSocket 터널링 자동화 검증 스크립트.
 *   `PROTOCOL.md`: 최하위 단계 아키텍처, JSON Envelope 스키마 및 Peer 라우팅 통신 명세 데이터.
 
 ## 라이선스

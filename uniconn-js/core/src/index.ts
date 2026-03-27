@@ -1,6 +1,7 @@
 // @uniconn/core — shared interfaces and secure protocol
 export type { Addr, IConn, IListener, IDialer, DialOptions } from "./conn.js";
 export { TimeoutError, ConnectionClosedError, ListenerClosedError } from "./errors.js";
+export * from "./p2p/index.js";
 
 // Secure protocol — namespace
 export * as secure from "./secure/index.js";

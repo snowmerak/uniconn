@@ -13,4 +13,4 @@ uniconn-py/.pytest_cache
 *.log
 err.txt
 out.txt
-tmp.exe
+tmp.exeweb_test_info.json

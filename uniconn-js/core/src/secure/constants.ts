@@ -15,5 +15,5 @@ export const MSG_HELLO_REPLY = 0x02;
 export const MSG_DATA = 0x03;
 export const MSG_ERROR = 0xff;
 
-/** ML-DSA-87 context string for USCP signatures. */
-export const MLDSA_CONTEXT = new TextEncoder().encode("uscp-v1");
+/** ML-DSA-87 context string for USCP signatures. Empty for cross-platform compat. */
+export const MLDSA_CONTEXT = new Uint8Array(0);

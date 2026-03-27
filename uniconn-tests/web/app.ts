@@ -1,6 +1,6 @@
-import { WebSocketDialer } from '@uniconn/web/src/websocket/dialer.js';
-import { BrowserIdentity, browserVerify } from '@uniconn/web/src/secure/identity.browser.js';
-import { Node, DefaultNodeConfig, Fingerprint } from '@uniconn/core/src/p2p/index.js';
+import { WebSocketConn } from '@uniconn/web/websocket/conn.ts';
+import { BrowserIdentity, browserVerify } from '@uniconn/web/secure/identity.ts';
+import { Node, DefaultNodeConfig } from '@uniconn/core/p2p/index.ts';
 
 function log(msg: string) {
   const div = document.createElement('div');
@@ -8,17 +8,21 @@ function log(msg: string) {
   document.getElementById('logs')?.appendChild(div);
 }
 
-const id = new BrowserIdentity();
-const dialer = new WebSocketDialer();
-// Since browser ml-dsa generation can be slow or async in some libs, we might need a method if BrowserIdentity initializes keys asynchronously.
-// Assuming it does it in constructor for now or sync just like node:crypto.
-const node = new Node(DefaultNodeConfig, id, browserVerify, dialer);
+let id: BrowserIdentity;
+let node: Node;
+const dialer = {
+  dial: (addr: string) => WebSocketConn.connect(addr)
+};
 
 async function init() {
-  // Try to generate key since WebCrypto/PQ might require async.
-  if (typeof (id as any).generate === 'function') {
-      await (id as any).generate();
-  }
+  log("Generating ML-DSA keys... this may take up to 30 seconds.");
+  
+  // Need to yield to UI thread so log renders before blocked keygen
+  await new Promise(r => setTimeout(r, 100));
+  
+  id = BrowserIdentity.generate();
+  node = new Node(DefaultNodeConfig, id, browserVerify, dialer);
+  log("Keys generated!");
 
   const myFpBuf = id.fingerprint();
   const myHex = Array.from(myFpBuf).map(b => b.toString(16).padStart(2, '0')).join('');

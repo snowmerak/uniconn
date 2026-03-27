@@ -7,9 +7,10 @@
     "dev": "vite"
   },
   "dependencies": {
-    "vite": "^5.0.0",
-    "typescript": "^5.0.0",
+    "@uniconn/core": "file:../../uniconn-js/core",
     "@uniconn/web": "file:../../uniconn-js/web",
-    "@uniconn/core": "file:../../uniconn-js/core"
+    "playwright": "^1.58.2",
+    "typescript": "^5.0.0",
+    "vite": "^5.0.0"
   }
 }

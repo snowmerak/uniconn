@@ -33,19 +33,19 @@ async def main():
     r1, r2, r3, py_node, go_node, ts_node = None, None, None, None, None, None
     try:
         # R1: TCP + WS
-        r1 = subprocess.Popen(["go", "run", "../uniconn-tests/tools/relay.go", "-tcp=127.0.0.1:10001", "-ws=127.0.0.1:10002", "-neg=127.0.0.1:19001"], stdout=subprocess.PIPE, text=True, cwd="../uniconn-go")
+        r1 = subprocess.Popen(["go", "run", "../uniconn-tests/tools_go/relay.go", "-tcp=127.0.0.1:10001", "-ws=127.0.0.1:10002", "-neg=127.0.0.1:19001"], stdout=subprocess.PIPE, text=True, cwd="../uniconn-go")
         r1_info = {}
         threading.Thread(target=read_and_echo, args=(r1, "R1", r1_info, "r1.log"), daemon=True).start()
         await asyncio.sleep(0.5)
 
         # R2: TCP + KCP, seeds=R1 (19001)
-        r2 = subprocess.Popen(["go", "run", "../uniconn-tests/tools/relay.go", "-tcp=127.0.0.1:10011", "-kcp=127.0.0.1:10012", "-neg=127.0.0.1:19002", "-seeds=127.0.0.1:19001"], stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, cwd="../uniconn-go")
+        r2 = subprocess.Popen(["go", "run", "../uniconn-tests/tools_go/relay.go", "-tcp=127.0.0.1:10011", "-kcp=127.0.0.1:10012", "-neg=127.0.0.1:19002", "-seeds=127.0.0.1:19001"], stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, cwd="../uniconn-go")
         r2_info = {}
         threading.Thread(target=read_and_echo, args=(r2, "R2", r2_info, "r2.log"), daemon=True).start()
         await asyncio.sleep(0.5)
 
         # R3: TCP, seeds=R2 (19002)
-        r3 = subprocess.Popen(["go", "run", "../uniconn-tests/tools/relay.go", "-tcp=127.0.0.1:10021", "-neg=127.0.0.1:19003", "-seeds=127.0.0.1:19002"], stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, cwd="../uniconn-go")
+        r3 = subprocess.Popen(["go", "run", "../uniconn-tests/tools_go/relay.go", "-tcp=127.0.0.1:10021", "-neg=127.0.0.1:19003", "-seeds=127.0.0.1:19002"], stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, cwd="../uniconn-go")
         r3_info = {}
         threading.Thread(target=read_and_echo, args=(r3, "R3", r3_info, "r3.log"), daemon=True).start()
         await asyncio.sleep(0.5)
@@ -55,7 +55,7 @@ async def main():
 
         # 1. Python Client (Responder, Connected to R3 TCP)
         uv_cmd = "uv.exe" if os.name == "nt" else "uv"
-        py_node = subprocess.Popen([uv_cmd, "run", "python", "../uniconn-tests/tools/py_client.py", "--relay", "127.0.0.1:10021", "--relay-fp", r3_info['fingerprint'], "--role", "responder"], stdout=subprocess.PIPE, stdin=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, cwd="../uniconn-py")
+        py_node = subprocess.Popen([uv_cmd, "run", "python", "../uniconn-tests/tools_py/py_client.py", "--relay", "127.0.0.1:10021", "--relay-fp", r3_info['fingerprint'], "--role", "responder"], stdout=subprocess.PIPE, stdin=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, cwd="../uniconn-py")
         py_info = {}
         threading.Thread(target=read_and_echo, args=(py_node, "PY", py_info, "py.log"), daemon=True).start()
         await asyncio.sleep(0.5)
@@ -63,7 +63,7 @@ async def main():
         print(f"[Py Client] Connected to R3. fp={py_fp}")
 
         # 2. Go Client (Responder, Connected to R2 KCP)
-        go_node = subprocess.Popen(["go", "run", "../uniconn-tests/tools/go_client.go", "--relay", "127.0.0.1:10012", "--relay-fp", r2_info['fingerprint'], "--proto", "kcp", "--role", "responder"], stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, cwd="../uniconn-go")
+        go_node = subprocess.Popen(["go", "run", "../uniconn-tests/tools_go/go_client.go", "--relay", "127.0.0.1:10012", "--relay-fp", r2_info['fingerprint'], "--proto", "kcp", "--role", "responder"], stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, cwd="../uniconn-go")
         go_info = {}
         threading.Thread(target=read_and_echo, args=(go_node, "GO", go_info, "go.log"), daemon=True).start()
         # Wait until we have go_fp
@@ -74,7 +74,7 @@ async def main():
 
         # 3. TS Client (Initiator targeting Py & Go, Connected to R1 TCP)
         npx_cmd = "npx.cmd" if os.name == "nt" else "npx"
-        ts_node = subprocess.Popen([npx_cmd, "tsx", "tools/ts_client.ts", "--relay", "127.0.0.1:10001", "--relay-fp", r1_info['fingerprint'], "--role", "initiator"], stdout=subprocess.PIPE, stdin=subprocess.PIPE, stderr=subprocess.STDOUT, text=True)
+        ts_node = subprocess.Popen([npx_cmd, "tsx", "../uniconn-tests/tools_ts/ts_client.ts", "--relay", "127.0.0.1:10001", "--relay-fp", r1_info['fingerprint'], "--role", "initiator"], stdout=subprocess.PIPE, stdin=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, cwd="../uniconn-tests")
         ts_info = {}
         threading.Thread(target=read_and_echo, args=(ts_node, "TS", ts_info, "ts.log"), daemon=True).start()
         # Wait until we have ts_fp

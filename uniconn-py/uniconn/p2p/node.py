@@ -88,22 +88,25 @@ class Node:
             pass
 
     async def _accept_relay_proxy(self, token: str, requester_hex: str) -> None:
-        if not self.relay_addr or not self.relay_fp:
-            return
+        try:
+            if not self.relay_addr or not self.relay_fp:
+                return
 
-        # 1. Dial Relay
-        raw_conn = await self.dialer.dial(self.relay_addr)
-        sc = await handshake_initiator(raw_conn, self.identity, self.relay_fp, self.verify_fn)
+            # 1. Dial Relay
+            raw_conn = await self.dialer.dial(self.relay_addr)
+            sc = await handshake_initiator(raw_conn, self.identity, self.relay_fp, self.verify_fn)
 
-        # 2. Accept token
-        accept_msg: AcceptRelayPayload = {"session_token": token}
-        await write_envelope(sc, MsgType.ACCEPT_RELAY, accept_msg)
+            # 2. Accept token
+            accept_msg: AcceptRelayPayload = {"session_token": token}
+            await write_envelope(sc, MsgType.ACCEPT_RELAY, accept_msg)
 
-        # 3. Handle Nested E2EE (Responder)
-        requester_fp = hex_to_bytes(requester_hex)
-        final_conn = await handshake_responder(sc, self.identity, requester_fp, self.verify_fn)
-        
-        await self.incoming_queue.put(final_conn)
+            # 3. Handle Nested E2EE (Responder)
+            requester_fp = hex_to_bytes(requester_hex)
+            final_conn = await handshake_responder(sc, self.identity, requester_fp, self.verify_fn)
+            
+            await self.incoming_queue.put(final_conn)
+        except Exception:
+            pass
 
     async def dial_peer(self, peer_fp: bytes) -> SecureConn:
         """Dial a remote peer through the Relay network."""

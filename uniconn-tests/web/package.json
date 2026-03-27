@@ -1,0 +1,15 @@
+{
+  "name": "uniconn-web-test",
+  "private": true,
+  "version": "1.0.0",
+  "type": "module",
+  "scripts": {
+    "dev": "vite"
+  },
+  "dependencies": {
+    "vite": "^5.0.0",
+    "typescript": "^5.0.0",
+    "@uniconn/web": "file:../../uniconn-js/web",
+    "@uniconn/core": "file:../../uniconn-js/core"
+  }
+}

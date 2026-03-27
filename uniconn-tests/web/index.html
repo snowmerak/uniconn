@@ -1,0 +1,28 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>P2P Web Client</title>
+</head>
+<body>
+    <h1>Uniconn P2P Web Client</h1>
+    <div>
+        <label>Relay Addr (WS): <input type="text" id="relayAddr" value="ws://127.0.0.1:10002" /></label>
+        <label>Relay FP (Hex): <input type="text" id="relayFp" value="" placeholder="Any (leave blank, or input hex)" /></label>
+        <button id="connectBtn">Connect Relay</button>
+    </div>
+    <div style="margin-top: 10px;">
+        <span>My Fingerprint: </span><b id="myFp" style="color: blue;">Not Connected</b>
+    </div>
+    <hr/>
+    <div>
+        <label>Target FP: <input type="text" id="targetFp" value="" /></label>
+        <button id="dialBtn" disabled>Dial Peer</button>
+    </div>
+    <hr/>
+    <h3>Logs</h3>
+    <pre id="logs" style="background:#f4f4f4; padding:10px; border:1px solid #ccc; height:300px; overflow-y:auto;"></pre>
+    <script type="module" src="/app.ts"></script>
+</body>
+</html>

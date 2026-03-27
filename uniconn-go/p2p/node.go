@@ -84,26 +84,32 @@ func (n *Node) readControlLoop(sc *secure.SecureConn) {
 		case MsgIncomingRelay:
 			var req IncomingRelayPayload
 			json.Unmarshal(env.Payload, &req)
-			go n.acceptRelayProxy(req.SessionToken, req.RequesterFingerprint)
+			go n.acceptRelayProxy(req.RequesterFingerprint, req.SessionToken)
 		}
 	}
 }
 
-func (n *Node) acceptRelayProxy(token, requesterFP string) {
+func (n *Node) acceptRelayProxy(requesterFP string, sessionToken string) {
+	log.Printf("[Node] Accepting relay proxy for session %s...\n", sessionToken)
 	// 1. Dial Relay
 	conn, err := n.dialer.Dial(context.Background(), n.relayAddr)
 	if err != nil {
+		log.Printf("[Node] Failed to dial relay: %v\n", err)
 		return
 	}
-	sc, err := secure.HandshakeInitiator(conn, n.identity, n.relayFP)
+	sc, err := secure.HandshakeInitiator(conn, n.identity, secure.AnyFingerprint)
 	if err != nil {
+		log.Printf("[Node] Failed HandshakeInitiator to relay: %v\n", err)
 		conn.Close()
 		return
 	}
 
 	// 2. Accept Token
-	pl := AcceptRelayPayload{SessionToken: token}
-	env := Envelope{Type: MsgAcceptRelay, Payload: marshal(pl)}
+	log.Printf("[Node] Sending MsgAcceptRelay...")
+	payload := AcceptRelayPayload{
+		SessionToken: sessionToken,
+	}
+	env := Envelope{Type: MsgAcceptRelay, Payload: marshal(payload)}
 	b, _ := json.Marshal(env)
 	sc.Write(append(b, '\n'))
 

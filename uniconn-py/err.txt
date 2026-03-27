@@ -1,0 +1,4 @@
+Traceback (most recent call last):
+  File "C:\Users\snowm\Projects\snowmerak\uniconn\uniconn-tests\tools\py_client.py", line 12, in <module>
+    from uniconn.websocket.dialer import WebSocketDialer
+ImportError: cannot import name 'WebSocketDialer' from 'uniconn.websocket.dialer' (C:\Users\snowm\Projects\snowmerak\uniconn\uniconn-tests\tools\..\..\uniconn-py\uniconn\websocket\dialer.py)

@@ -120,6 +120,7 @@ func (r *RelayServer) handleIncoming(conn net.Conn) {
 
 	var env Envelope
 	if err := json.Unmarshal(line, &env); err != nil {
+		log.Printf("[Relay] handleIncoming unmarshal failed: %v. Line: %q\n", err, line)
 		secConn.Close()
 		return
 	}
@@ -152,7 +153,7 @@ func (r *RelayServer) handleIncoming(conn net.Conn) {
 		r.handleRelayReq(secConn, peerFP, env.Payload)
 	case MsgAcceptRelay:
 		r.handleAcceptRelay(secConn, peerFP, env.Payload)
-	case MsgGetRelays, MsgRelaysList, MsgGossipUpdate, MsgRelayInternalReq:
+	case MsgGetRelays, MsgRelaysList, MsgGossipUpdate:
 		// Incoming Relay-to-Relay Gossip/Control connection.
 		
 		// Ensure we record it as a neighbor for bi-directional broadcast
@@ -163,6 +164,11 @@ func (r *RelayServer) handleIncoming(conn net.Conn) {
 		r.processGossipMessage(secConn.RemoteAddr().String(), env, secConn)
 		// Hand off to dedicated neighbor connection handler
 		r.handleNeighborConn(secConn.RemoteAddr().String(), secConn, reader)
+	case MsgRelayInternalReq:
+		// Serve as a dedicated physical link for 2-hop routing
+		r.processGossipMessage(secConn.RemoteAddr().String(), env, secConn)
+		// Do not enter handleNeighborConn, because secConn is now hijacked for io.Copy!
+		// It will be closed automatically when io.Copy finishes.
 	default:
 		secConn.Close() // Unexpected initial msg
 	}
@@ -213,7 +219,7 @@ func (r *RelayServer) handleAnnounce(conn *secure.SecureConn, fp string, payload
 		directAddresses: body.DirectAddresses,
 	}
 	r.mu.Unlock()
-	log.Printf("[Relay] Node announced: %s\n", fp[:8])
+	log.Printf("[Relay] Node announced: %s from %s (payload IPs: %v)\n", fp[:8], conn.RemoteAddr().String(), body.DirectAddresses)
 }
 
 func (r *RelayServer) sendPeerInfo(conn *secure.SecureConn, targetFP string) {
@@ -256,6 +262,8 @@ func (r *RelayServer) handleRelayReq(conn *secure.SecureConn, requesterFP string
 	activeEntry, isActive := r.activeNodes[targetFP]
 	globalEntry, isGlobal := r.globalRouting[targetFP]
 	
+	log.Printf("[Relay] handleRelayReq Target: %s, isActive: %v, isGlobal: %v\n", targetFP[:8], isActive, isGlobal)
+
 	if !isActive {
 		if isGlobal && globalEntry.relayAddr != r.listener.Addr().String() {
 			r.mu.RUnlock()
@@ -290,6 +298,7 @@ func (r *RelayServer) handleRelayReq(conn *secure.SecureConn, requesterFP string
 	}
 	env := Envelope{Type: MsgIncomingRelay, Payload: marshal(inMsg)}
 	b, _ := json.Marshal(env)
+	log.Printf("[Relay] Sending MsgIncomingRelay to target %s\n", targetFP[:8])
 	entry.controlConn.Write(append(b, '\n'))
 
 	// Wait for target
@@ -345,11 +354,13 @@ func (r *RelayServer) handleRemoteRelayReq(requesterConn *secure.SecureConn, req
 	// Open physical pipeline to remote Relay (2-Hop segment)
 	conn, err := r.dialer.Dial(context.Background(), remoteRelayAddr)
 	if err != nil {
+		log.Printf("[Relay] handleRemoteRelayReq Dial failed: %v", err)
 		msg, _ := json.Marshal(Envelope{Type: MsgRelayAck, Payload: marshal(RelayAckPayload{TargetFingerprint: targetFP, Success: false, Reason: "remote relay unreachable"})})
 		requesterConn.Write(append(msg, '\n'))
 		requesterConn.Close()
 		return
 	}
+	log.Printf("[Relay] handleRemoteRelayReq Dial %s succeeded", remoteRelayAddr)
 
 	secConn, err := secure.HandshakeInitiator(conn, r.identity, secure.AnyFingerprint)
 	if err != nil {
@@ -368,16 +379,28 @@ func (r *RelayServer) handleRemoteRelayReq(requesterConn *secure.SecureConn, req
 	secConn.Write(append(b, '\n'))
 
 	// Wait for MsgRelayAck from remote relay
-	reader := bufio.NewReader(secConn)
-	line, err := reader.ReadBytes('\n')
-	if err != nil {
-		secConn.Close()
-		requesterConn.Close()
-		return
+	// Use 1-byte read to avoid consuming trailing tunnel data in bufio buffer
+	line := make([]byte, 0, 256)
+	buf := make([]byte, 1)
+	for {
+		n, err := secConn.Read(buf)
+		if err != nil {
+			log.Printf("[Relay] handleRemoteRelayReq secConn block error: %v", err)
+			secConn.Close()
+			requesterConn.Close()
+			return
+		}
+		if n > 0 {
+			if buf[0] == '\n' {
+				break
+			}
+			line = append(line, buf[0])
+		}
 	}
 
 	var env Envelope
 	if err := json.Unmarshal(line, &env); err != nil {
+		log.Printf("[Relay] handleRemoteRelayReq unmarshal failed: %v, line: %s\n", err, string(line))
 		secConn.Close()
 		requesterConn.Close()
 		return

@@ -77,7 +77,7 @@ async def handshake_initiator(
 
     shared_secret = bytes(decrypt(sk_kem, reply["payload"]))
     keys = _derive_keys(shared_secret)
-    return SecureConn(keys, is_initiator=True)
+    return SecureConn(keys, is_initiator=True).bind(conn)
 
 
 async def handshake_responder(
@@ -115,4 +115,4 @@ async def handshake_responder(
     await conn.write(reply)
 
     keys = _derive_keys(shared_secret)
-    return SecureConn(keys, is_initiator=False)
+    return SecureConn(keys, is_initiator=False).bind(conn)

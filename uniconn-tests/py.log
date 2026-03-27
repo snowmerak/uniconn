@@ -1,0 +1,2 @@
+{"event": "connected", "fingerprint": "35b45b0c726ecdd5435ca02eb9a6422efa86d41273cdafa7e5eff768e35b8aed22c95c5abce58ec7f66260d3fda9bc9a96047cad47df17179ec137de11ecd13f"}
+{"event": "msg_received", "data": "PONG_FROM_GO"}

@@ -1,6 +1,8 @@
 package p2p
 
 import (
+	"encoding/json"
+
 	"github.com/snowmerak/uniconn/uniconn-go/multi"
 )
 
@@ -57,8 +59,8 @@ const (
 
 // Envelope wraps all protocol messages.
 type Envelope struct {
-	Type    MsgType `json:"type"`
-	Payload []byte  `json:"payload,omitempty"` // JSON-encoded underlying payload Structure
+	Type    MsgType         `json:"type"`
+	Payload json.RawMessage `json:"payload,omitempty"` // JSON-encoded underlying payload Structure
 }
 
 // AnnouncePayload is the content for MsgAnnounce.

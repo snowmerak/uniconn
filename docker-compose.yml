@@ -1,0 +1,4 @@
+version: '3.8'
+services:
+  # 현재 uniconn P2P 라이브러리 테스트는 
+  # 로컬 의존성(PostgreSQL, Redis 등)이 필요하지 않으므로 비워둡니다.

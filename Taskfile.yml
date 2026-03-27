@@ -1,0 +1,58 @@
+version: '3'
+
+tasks:
+  infra:up:
+    desc: "Start infrastructure dependencies (Docker Compose)"
+    cmds:
+      - docker compose up -d --wait
+
+  infra:down:
+    desc: "Stop and clean up infrastructure (Docker Compose)"
+    cmds:
+      - docker compose down -v
+
+  test:unit:
+    desc: "Run unit tests across all language runtimes (Go, Python, TypeScript)"
+    cmds:
+      - cd uniconn-go && go test ./...
+      - cd uniconn-py && uv run pytest
+      - cd uniconn-js/core && npm test --if-present
+      - cd uniconn-js/node && npm test --if-present
+
+  test:cross:
+    desc: "Run cross-runtime (Go, Python, TypeScript) mesh integration tests"
+    dir: uniconn-tests
+    cmds:
+      - uv run python runners/run_p2p_cross.py
+
+  test:web:
+    desc: "Run headless Playwright browser E2E test"
+    dir: uniconn-tests/web
+    cmds:
+      - node pw.mjs
+
+  test:integration:
+    desc: "Execute complete integration tests (requires infra & testnet)"
+    deps: [infra:up]
+    cmds:
+      - task: test:cross
+      - task: test:web
+
+  test:all:
+    desc: "Run ALL tests (Unit + Integration)"
+    cmds:
+      - task: test:unit
+      - task: test:integration
+
+  run:testnet:
+    desc: "Spin up local Relay, Python Responder, and Vite Server for web testing"
+    dir: uniconn-tests/web
+    cmds:
+      - uv run python run_web.py
+
+  build:
+    desc: "Build binaries and Node packages"
+    cmds:
+      - cd uniconn-go && go build ./...
+      - cd uniconn-js/web && npm run build
+      - cd uniconn-py && uv build

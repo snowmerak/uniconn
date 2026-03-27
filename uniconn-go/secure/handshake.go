@@ -81,7 +81,7 @@ func HandshakeInitiator(rw io.ReadWriter, id *Identity, peerFP Fingerprint) (*Se
 		return nil, err
 	}
 	gotFP := computeFingerprintBytes(reply.PublicKey)
-	if gotFP != peerFP {
+	if peerFP != AnyFingerprint && gotFP != peerFP {
 		return nil, fmt.Errorf("fingerprint mismatch")
 	}
 	if !Verify(peerPub, reply.Payload, reply.Signature) {
@@ -97,7 +97,7 @@ func HandshakeInitiator(rw io.ReadWriter, id *Identity, peerFP Fingerprint) (*Se
 	// 7. Derive keys.
 	keys := deriveKeys(ss)
 
-	return newSecureConn(rw, keys, true), nil
+	return newSecureConn(rw, keys, true, gotFP), nil
 }
 
 // HandshakeResponder performs the responder side of the USCP handshake.
@@ -124,7 +124,7 @@ func HandshakeResponder(rw io.ReadWriter, id *Identity, peerFP Fingerprint) (*Se
 		return nil, err
 	}
 	gotFP := computeFingerprintBytes(hello.PublicKey)
-	if gotFP != peerFP {
+	if peerFP != AnyFingerprint && gotFP != peerFP {
 		return nil, fmt.Errorf("fingerprint mismatch")
 	}
 	if !Verify(peerPub, hello.Payload, hello.Signature) {
@@ -159,5 +159,5 @@ func HandshakeResponder(rw io.ReadWriter, id *Identity, peerFP Fingerprint) (*Se
 	// 6. Derive keys.
 	keys := deriveKeys(ss)
 
-	return newSecureConn(rw, keys, false), nil
+	return newSecureConn(rw, keys, false, gotFP), nil
 }

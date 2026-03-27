@@ -342,3 +342,31 @@ MSG_ERROR               = 0xFF
 ML-DSA-87 (FIPS 204), ML-KEM-1024 (FIPS 203)를 구현하는
 라이브러리가 있는 언어에서 이 프로토콜을 구현할 수 있습니다.
 호환성 테스트는 §7의 와이어 포맷을 기준으로 수행합니다.
+
+---
+
+## 11. P2P 시그널링 계층 (USCP-P2P Extension)
+
+P2P 레이어는 **USCP v1 E2EE 터널 상단에서 구동되는 JSON 기반 제어 프로토콜**입니다. 
+모든 패킷은 Node와 Relay 간 완성된보안 통신망을 통해 JSON 문자열(`\n` 종료자 포함) 형태로 교환됩니다. Relay 서버는 Public 용도이므로 USCP 핸드셰이크 시 `AnyFingerprint(0x00...00)`를 허용해야 합니다.
+
+### 11.1. 제어 메시지 (MsgType)
+
+| 타입 | 방향 | 설명 |
+|---|---|---|
+| `ANNOUNCE` | Node → Relay | 자신의 `fingerprint`, 가용 주소(`direct_addresses`) 및 지원 스택 선언 |
+| `FIND_PEER` | Node → Relay | 대상의 `target_fingerprint`를 기반으로 직접 연결 가능한 메타 정보 조회 |
+| `FOUND_PEER` | Relay → Node | `FIND_PEER`에 대한 응답 반환 |
+| `RELAY_REQ` | Node → Relay | Relay 서버에게 중계(Dumb Pipe) 프록시 연결 수립 요청 |
+| `INCOMING_RELAY` | Relay → Node(Target) | 대상 피어의 Control Conn으로 `session_token` 전송, 다이얼백 유도 |
+| `ACCEPT_RELAY` | Node(Target) → Relay | `session_token`과 함께 Relay의 새 프록시 스트림 묶음 요청 응답 |
+| `RELAY_ACK` | Relay → Node(Req) | 프록시가 완성(Target 접속 완료)되었음을 통보 `{"success": true}` |
+
+### 11.2. 중첩 E2EE (Nested E2EE) 라우팅
+
+1. Node **A** 가 Relay **R** 에 `RELAY_REQ` 요청. (A-R 간 USCP 암호화 중).
+2. Relay **R** 이 Target **B** 의 제어 커넥션으로 `INCOMING_RELAY(Token)` 발송.
+3. Node **B** 가 Relay **R** 로 새로운 커넥션을 맺고 `ACCEPT_RELAY`로 Token 응답.
+4. Relay **R** 은 즉시 해당 제어 로직을 종료하고, A의 커넥션과 B의 신규 커넥션을 **원시 바이트(Dumb Pipe) 레벨에서 단순 복사(`io.Copy`)** 모드로 차단 없이 중계합니다.
+5. 이후 Node **A** 와 Node **B** 는 연결된 파이프를 통해 서로 상대방의 Fingerprint를 이용한 **2차 USCP 핸드셰이크(Nested E2EE)** 를 개시합니다.
+6. 이로써 릴레이 노드(R)는 Payload를 해독할 수 없고, A와 B는 완전한 종단간 기밀성을 누리게 됩니다.

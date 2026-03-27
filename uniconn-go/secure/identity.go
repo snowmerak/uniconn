@@ -20,6 +20,9 @@ import (
 // Fingerprint is a 64-byte BLAKE3 hash of an ML-DSA-87 public key.
 type Fingerprint [FingerprintSize]byte
 
+// AnyFingerprint is an all-zero fingerprint used by public servers to accept any peer.
+var AnyFingerprint Fingerprint
+
 // Identity holds an ML-DSA-87 key pair for signing and authentication.
 type Identity struct {
 	PublicKey  *mldsa87.PublicKey

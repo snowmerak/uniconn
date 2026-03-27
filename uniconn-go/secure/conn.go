@@ -23,6 +23,8 @@ type SecureConn struct {
 	sendNoncePfx [NoncePrefixSize]byte
 	recvNoncePfx [NoncePrefixSize]byte
 
+	peerFingerprint Fingerprint
+
 	sendCounter uint64
 	sendMu      sync.Mutex
 
@@ -35,8 +37,8 @@ type SecureConn struct {
 	netConn net.Conn
 }
 
-func newSecureConn(rw io.ReadWriter, keys *sessionKeys, isInitiator bool) *SecureConn {
-	sc := &SecureConn{inner: rw}
+func newSecureConn(rw io.ReadWriter, keys *sessionKeys, isInitiator bool, peerFP Fingerprint) *SecureConn {
+	sc := &SecureConn{inner: rw, peerFingerprint: peerFP}
 
 	if isInitiator {
 		sc.sendKey = keys.InitiatorKey
@@ -183,6 +185,11 @@ func (sc *SecureConn) Close() error {
 		return closer.Close()
 	}
 	return nil
+}
+
+// PeerFingerprint returns the 64-byte BLAKE3 fingerprint of the authenticated peer.
+func (sc *SecureConn) PeerFingerprint() Fingerprint {
+	return sc.peerFingerprint
 }
 
 // — net.Conn interface delegation ——————————————————————————————

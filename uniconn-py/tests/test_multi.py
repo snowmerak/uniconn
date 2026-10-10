@@ -14,6 +14,7 @@ from uniconn.multi import (
     MultiDialerConfig,
     MultiListener,
     TransportConfig,
+    AcceptResult,
 )
 from uniconn.conn import Conn, Listener, Dialer, Addr
 
@@ -78,6 +79,10 @@ class MockDialer(Dialer):
 
 # ─── Tests ──────────────────────────────────────────────────
 
+async def _wait_for_queue(listener):
+    while listener._queue.empty():
+        await asyncio.sleep(0)
+
 
 class TestNegotiateResponse:
     def test_json_roundtrip(self):
@@ -93,6 +98,41 @@ class TestNegotiateResponse:
 
 
 class TestMultiListener:
+    @pytest.mark.asyncio
+    async def test_cancelled_accept_closes_a_connection_already_taken_from_queue(self):
+        ml = MultiListener([TransportConfig("tcp", "mock", MockListener())])
+        conn = MockConn()
+        ml._queue.put_nowait(AcceptResult(conn, "tcp"))
+        task = asyncio.create_task(ml.accept())
+        while not ml._queue.empty():
+            await asyncio.sleep(0)
+        task.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await task
+        assert conn.closed
+        await ml.close()
+
+    @pytest.mark.asyncio
+    async def test_close_wakes_waiters_and_closes_queued_connections(self):
+        listener = MockListener()
+        ml = MultiListener([TransportConfig("tcp", "mock", listener)])
+        await ml.start()
+        waiters = [asyncio.create_task(ml.accept()) for _ in range(3)]
+        await asyncio.sleep(0)
+        await ml.close()
+        results = await asyncio.wait_for(asyncio.gather(*waiters, return_exceptions=True), 1)
+        assert all(isinstance(result, RuntimeError) for result in results)
+
+        listener = MockListener()
+        ml = MultiListener([TransportConfig("tcp", "mock", listener)])
+        await ml.start()
+        conn = MockConn()
+        listener.push(conn)
+        # Yield until the fan-in loop has transferred ownership.
+        await asyncio.wait_for(_wait_for_queue(ml), 1)
+        await ml.close()
+        assert conn.closed
+
     @pytest.mark.asyncio
     async def test_fan_in(self):
         ln1 = MockListener()

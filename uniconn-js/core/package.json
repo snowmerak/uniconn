@@ -15,6 +15,7 @@
     "./secure/store": "./dist/secure/store.js",
     "./secure": "./dist/secure/index.js",
     "./multi": "./dist/multi/index.js",
+    "./p2p": "./dist/p2p/index.js",
     "./conn": "./dist/conn.js",
     "./errors": "./dist/errors.js"
   },

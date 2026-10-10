@@ -9,7 +9,7 @@ import {
   MSG_DATA,
   MSG_ERROR,
 } from "./constants.js";
-import { marshalData, marshalError, readFrame, writeFrame, writeU32BE, writeU64BE } from "./message.js";
+import { marshalData, readFrame, writeFrame, writeU32BE, writeU64BE } from "./message.js";
 
 export interface SessionKeys {
   initiatorKey: Uint8Array; // 32B
@@ -29,6 +29,9 @@ export class SecureConn implements IConn {
   private sendNoncePfx: Uint8Array;
   private recvNoncePfx: Uint8Array;
   private sendCounter: bigint = 0n;
+  private recvCounter: bigint = 0n;
+  private writes: Promise<unknown> = Promise.resolve();
+  private reads: Promise<unknown> = Promise.resolve();
   private recvBuf: Uint8Array | null = null;
   private closed = false;
 
@@ -48,7 +51,13 @@ export class SecureConn implements IConn {
     }
   }
 
-  async write(data: Uint8Array): Promise<number> {
+  write(data: Uint8Array): Promise<number> {
+    const operation = this.writes.then(() => this.writeData(data));
+    this.writes = operation.catch(() => {});
+    return operation;
+  }
+
+  private async writeData(data: Uint8Array): Promise<number> {
     if (this.closed) throw new Error("connection closed");
     if (data.length === 0) return 0;
 
@@ -70,8 +79,15 @@ export class SecureConn implements IConn {
     return data.length;
   }
 
-  async read(buffer: Uint8Array): Promise<number> {
+  read(buffer: Uint8Array): Promise<number> {
+    const operation = this.reads.then(() => this.readData(buffer));
+    this.reads = operation.catch(() => {});
+    return operation;
+  }
+
+  private async readData(buffer: Uint8Array): Promise<number> {
     if (this.closed) throw new Error("connection closed");
+    if (buffer.length === 0) return 0;
 
     // Return buffered data first.
     if (this.recvBuf && this.recvBuf.length > 0) {
@@ -109,6 +125,7 @@ export class SecureConn implements IConn {
 
     const ts = readU32BEFrom(body, 1);
     const counter = readU64BEFrom(body, 5);
+    if (counter !== this.recvCounter) throw new Error("unexpected DATA counter");
     const ciphertext = body.subarray(13);
 
     // Reconstruct nonce.
@@ -119,6 +136,7 @@ export class SecureConn implements IConn {
 
     const plaintext = this.recvCipher.open(nonce, ciphertext);
     if (!plaintext) throw new Error("decrypt failed: AEAD tag mismatch");
+    this.recvCounter++;
 
     const n = Math.min(buffer.length, plaintext.length);
     buffer.set(plaintext.subarray(0, n));
@@ -131,11 +149,6 @@ export class SecureConn implements IConn {
   async close(): Promise<void> {
     if (this.closed) return;
     this.closed = true;
-    try {
-      await writeFrame(this.inner, marshalError("closed"));
-    } catch {
-      // best-effort
-    }
     await this.inner.close();
   }
 

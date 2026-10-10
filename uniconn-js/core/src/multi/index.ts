@@ -150,12 +150,16 @@ export class MultiListener {
   private connQueue: AcceptResult[] = [];
   private waiters: Array<(result: AcceptResult | Error) => void> = [];
   private closed = false;
+  private closePromise?: Promise<void>;
+  private activeLoops: number;
+  private acceptError?: Error;
 
   constructor(transports: TransportConfig[]) {
     if (transports.length === 0) {
       throw new Error("multi: at least one transport is required");
     }
     this.transports = transports;
+    this.activeLoops = transports.length;
 
     // Start accept loops for each transport.
     for (const t of transports) {
@@ -210,21 +214,29 @@ export class MultiListener {
 
   /** Close all underlying listeners. */
   async close(): Promise<void> {
+    if (this.closePromise) return this.closePromise;
     this.closed = true;
     for (const w of this.waiters) {
-      w(new Error("listener closed"));
+      w(this.acceptError ?? new Error("listener closed"));
     }
     this.waiters = [];
 
-    for (const t of this.transports) {
-      await t.listener.close();
-    }
+    const pending = this.connQueue.splice(0);
+    this.closePromise = Promise.allSettled([
+      ...this.transports.map(t => t.listener.close()),
+      ...pending.map(result => result.conn.close()),
+    ]).then(results => {
+      const failure = results.find(result => result.status === 'rejected');
+      if (failure?.status === 'rejected') throw failure.reason;
+    });
+    return this.closePromise;
   }
 
   private async acceptLoop(t: TransportConfig): Promise<void> {
     while (!this.closed) {
       try {
         const conn = await t.listener.accept();
+        if (this.closed) { await conn.close(); return; }
         const result: AcceptResult = { conn, protocol: t.protocol };
 
         const waiter = this.waiters.shift();
@@ -233,8 +245,13 @@ export class MultiListener {
         } else {
           this.connQueue.push(result);
         }
-      } catch {
+      } catch (error) {
         if (!this.closed) {
+          this.activeLoops--;
+          if (this.activeLoops === 0) {
+            this.acceptError = error instanceof Error ? error : new Error(String(error));
+            void this.close().catch(() => {});
+          }
           break;
         }
       }

@@ -2,6 +2,7 @@
 export type { Addr, IConn, IListener, IDialer, DialOptions } from "./conn.js";
 export { TimeoutError, ConnectionClosedError, ListenerClosedError } from "./errors.js";
 export * from "./p2p/index.js";
+export { ReadQueue } from "./read-queue.js";
 
 // Secure protocol — namespace
 export * as secure from "./secure/index.js";

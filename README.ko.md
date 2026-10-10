@@ -28,12 +28,15 @@ go run ../uniconn-tests/tools_go/relay.go -tcp=127.0.0.1:10011 -kcp=127.0.0.1:10
 
 *(참고: 다른 릴레이 서버와 페더레이션 메쉬를 형성하려면 `-seeds=127.0.0.1:19002` 옵션을 추가하십시오)*
 
+릴레이가 출력하는 JSON의 `fingerprint`를 `RELAY_FINGERPRINT` 환경 변수에 설정합니다. Python과 TypeScript는 정확한 64바이트 fingerprint를 요구하며, 빈 값이나 0으로 채운 값은 인증 우회 옵션이 아닙니다.
+
 ### 2. 수신(Responder) 노드 접속 (Python)
 
 Responder 측에서 P2P 스트림 연결을 대기하는 법입니다.
 
 ```python
 import asyncio
+import os
 from uniconn.secure.identity import Identity
 from uniconn.p2p.node import Node, DefaultNodeConfig
 from uniconn.tcp.dialer import TcpDialer
@@ -45,7 +48,8 @@ async def main():
     print(f"나의 Fingerprint: {identity.fingerprint().hex()}")
 
     # 릴레이 서버에 접속
-    await node.connect_relay("127.0.0.1:10011", b"")
+    relay_fp = bytes.fromhex(os.environ["RELAY_FINGERPRINT"])
+    await node.connect_relay("127.0.0.1:10011", relay_fp)
 
     print("피어의 연결 대기 중...")
     conn = await node.accept()
@@ -70,7 +74,8 @@ async function main() {
   const node = new Node(DefaultNodeConfig, id, nodeVerify, new TcpDialer());
 
   // 릴레이 접속
-  await node.connectRelay("127.0.0.1:10011", Buffer.alloc(64));
+  const relayFp = Buffer.from(process.env.RELAY_FINGERPRINT!, "hex");
+  await node.connectRelay("127.0.0.1:10011", relayFp);
 
   // 접속하려는 대상(Python Responder)의 128자리 Hex Fingerprint
   const targetFp = Buffer.from("target-fingerprint-hex...", "hex");
@@ -95,12 +100,20 @@ main();
 *   `uniconn-js/`: 브라우저 및 Node.js 런타임을 위한 코어 로직과 인터페이스 구조.
     *   `core/`: 핸드셰이크, 신원 프리미티브 및 Envelope 파싱.
     *   `node/`: Node.js 네이티브 API를 사용한 TCP/WS 등 바인딩.
-    *   `browser/`: WebCrypto API 통합 및 웹 브라우저 환경 전용 WebSocket 연결.
+    *   `web/`: WebCrypto API 통합 및 웹 브라우저 환경 전용 WebSocket 연결.
 *   `uniconn-py/`: `cryptography` 라이브러리를 적용한 풀-스케일 Python `asyncio` 클라이언트.
 *   `uniconn-tests/`: 언어 런타임 간 크로스-테스트 실행(`runners`) 스크립트 모음 및 프로토콜 검증 로직.
     *   `runners/run_p2p_cross.py`: Go, Node.js, Python 런타임을 관통하는 E2EE Mesh 통합 검증 스크립트.
     *   `web/pw.mjs`: Playwright 기반으로 동작하는 브라우저 환경 종단 간(Vite Dev Server) WebSocket 터널링 자동화 검증 스크립트.
 *   `PROTOCOL.md`: 최하위 단계 아키텍처, JSON Envelope 스키마 및 Peer 라우팅 통신 명세 데이터.
+
+## 테스트와 안정성
+
+`task test:unit`은 새 JavaScript 빌드와 Go/Python 회귀 테스트를 실행합니다. `task test:cross`는 실제 메시지를 검증하는 Go/Python/Node 릴레이 통합 테스트입니다. `task test:transport-cross`는 네이티브 KCP 바인딩이 필요한 전송 계층 통합 테스트입니다.
+
+Node 종료 시 Go는 `Close()`, Python/TypeScript는 `close()`를 호출합니다. 이미 반환된 피어 연결은 호출자가 별도로 닫습니다.
+
+조사 결과, 수정 사항과 검증 범위는 [안정성 검토 문서](docs/stability-review.md)를 참고하세요.
 
 ## 라이선스
 

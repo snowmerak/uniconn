@@ -86,6 +86,22 @@ describe("NegotiateResponse", () => {
 });
 
 describe("MultiListener", () => {
+  it("close rejects all waiters and closes queued or late connections", async () => {
+    const ln = new MockListener();
+    const ml = new MultiListener([{ protocol: 'tcp', address: 'mock', listener: ln }]);
+    const waiters = [ml.accept(), ml.accept()].map(p => assert.rejects(p, /closed/));
+    await ml.close(); await Promise.all(waiters);
+    const late = new MockConn(); ln.push(late);
+    await new Promise<void>(resolve => setImmediate(resolve));
+    assert.equal(late.closed, true);
+
+    const second = new MockListener();
+    const queued = new MultiListener([{ protocol: 'tcp', address: 'mock', listener: second }]);
+    const conn = new MockConn(); second.push(conn);
+    await new Promise<void>(resolve => setImmediate(resolve));
+    await queued.close(); assert.equal(conn.closed, true);
+  });
+
   it("fans-in from multiple transports", async () => {
     const ln1 = new MockListener();
     const ln2 = new MockListener();

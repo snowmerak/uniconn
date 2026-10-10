@@ -10,6 +10,7 @@ import { describe, it, before, after } from "node:test";
 import assert from "node:assert/strict";
 import { spawn, execSync, type ChildProcess } from "node:child_process";
 import { setTimeout as sleep } from "node:timers/promises";
+import { fileURLToPath } from "node:url";
 
 import { TcpDialer } from "../tcp/index.js";
 import { WsDialer } from "../websocket/index.js";
@@ -24,7 +25,7 @@ function startGoServer(): Promise<ChildProcess> {
       "go",
       ["run", "./cmd/echoserver"],
       {
-        cwd: process.env.UNICONN_GO_DIR || "../uniconn-go",
+        cwd: process.env.UNICONN_GO_DIR || fileURLToPath(new URL("../../../../uniconn-go", import.meta.url)),
         stdio: ["ignore", "pipe", "pipe"],
         detached: false,
       },

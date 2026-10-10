@@ -13,33 +13,35 @@ Heterogeneous runtimes might only natively support a subset of protocols (e.g., 
 
 ### Sequence:
 1.  **Initiator/Node HTTP request**: `GET http://<relay-address>:<negotiate_port>/negotiate`
-2.  **Relay Response** (JSON Array): Lists live `multi.ProtocolEntry`. 
+2.  **Relay Response** (JSON Object): Lists live `multi.ProtocolEntry`.
 
 ```json
-[
-  {"protocol": "tcp", "address": "127.0.0.1:10011"},
-  {"protocol": "kcp", "address": "127.0.0.1:10012"},
-  {"protocol": "websocket", "address": "127.0.0.1:10002"}
-]
+{
+  "protocols": [
+    {"name": "tcp", "address": "127.0.0.1:10011"},
+    {"name": "kcp", "address": "127.0.0.1:10012"},
+    {"name": "websocket", "address": "ws://127.0.0.1:10002"}
+  ]
+}
 ```
 
-3.  The caller's `MultiDialer` iterates matching known protocol priorities (e.g., TCP > WS > KCP) against the server offerings and completes the physical socket dial.
+3.  The caller's `MultiDialer` iterates matching known protocol priorities (e.g., WebTransport > QUIC > WebSocket > KCP > TCP) against the server offerings and completes the physical socket dial.
 
 ## 3. End-to-End Encryption Frame (E2EE Handshake)
 
 After physical connections (TCP, WS, etc.) succeed, the E2EE Handshake occurs immediately to exchange temporary cryptographic streams before any JSON logic is injected. Uniconn employs ML-DSA signatures.
 
 1.  **Client (Initiator)** `secure.HandshakeInitiator`:
-    *   Generates Ephemeral KeyPair / Nonces.
-    *   Initiate Diffie-Hellman / Key Encapsulation (Kyber).
+    *   Generates an ephemeral ML-KEM-1024 key pair.
+    *   Signs the encapsulation key with the long-lived ML-DSA-87 identity.
     *   Authenticates with ML-DSA-87 Identity PrivateKey (`sign`).
-    *   Transmits `ClientHello`.
+    *   Transmits `HELLO`.
 2.  **Server/Peer (Responder)** `secure.HandshakeResponder`:
-    *   Receives `ClientHello`, validates ML-DSA signature against `publicKeyRaw`.
-    *   Replies with `ServerHello` authenticating back.
-3.  **Encrypted Tunnel Bound**: The connection upgrades to a `SecureConn` implementing the standard I/O stream interface. All subsequent payloads are ChaCha20-Poly1305 encrypted.
+    *   Receives `HELLO`, validates the ML-DSA signature against `publicKeyRaw`.
+    *   Encapsulates a shared secret and replies with signed `HELLO_REPLY` ciphertext.
+3.  **Encrypted Tunnel Bound**: The connection upgrades to a `SecureConn` implementing the standard I/O stream interface. All subsequent payloads are XChaCha20-Poly1305 encrypted. Each direction starts its DATA counter at zero. A receiver accepts only its next expected counter, advancing it after successful AEAD verification. Senders serialize frame writes to preserve order. Replayed or reordered DATA frames are rejected; the wire format is unchanged.
 
-*(Note: During `Relay <-> Node` connections, since the Relay operates purely in a pass-through manner for P2P routing, it utilizes an `<AnyFingerprint>` bypass configuration because it does not strictly need to authenticate public anonymous Nodes joining the mesh, unless specifically constrained).*
+The Go public relay accepts connections using `secure.AnyFingerprint`, but verifies the presented identity signature. Go callers may explicitly use that wildcard; Python and TypeScript callers must supply the exact relay fingerprint. The nested peer handshake always authenticates the requested peer identity.
 
 ## 4. Control Frame Format (JSON Envelopes)
 
@@ -85,3 +87,13 @@ When Node A dictates traffic for Node B.
     *   Relay B splices (via `io.Copy`) the new connection from Node B back down the waiting `RELAY_INTERNAL_REQ` tunnel from Relay A.
     *   Relay A routes the response payload back to Node A with a `RELAY_ACK`.
 7.  **Data Pump**: All relays relinquish the envelope parsers. The connection becomes a direct byte pipe strictly shuttling opaque `SecureConn` streams. Node A and Node B can now conduct a *secondary layered P2P E2EE Handshake* exclusively over the relay proxy.
+
+## 7. Connection Lifecycle
+
+Connection setup includes transport dialing, relay acknowledgement and outer/nested handshakes. The default setup timeout is ten seconds (`SetupTimeout` in Go, `setup_timeout` in Python and `setupTimeoutMs` in TypeScript). Go context cancellation and TypeScript `DialOptions.signal` also interrupt setup.
+
+`SecureConn.Close/close` closes the underlying connection directly, without waiting to write an error frame. Peer EOF or a transport error signals closure; callers must not require a final `MSG_ERROR` notification. Closing a MultiListener wakes pending accepts and closes queued connections it still owns.
+
+Node shutdown, relay disconnection or replacement cancels pending setup and fails all pending accepts in that session. Connections already returned by `DialPeer/dial_peer/dialPeer` or `Accept/accept` belong to callers and are not closed by Node shutdown. Applications close those connections separately. A disconnected Node may explicitly reconnect; a closed Node cannot reconnect.
+
+Node control envelopes and incoming Go relay control envelopes are limited to 64 KiB. Fingerprint strings must contain exactly 128 hexadecimal characters before routing or gossip state is modified.

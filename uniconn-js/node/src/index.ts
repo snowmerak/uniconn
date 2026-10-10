@@ -2,6 +2,8 @@
 export type { Addr, IConn, IListener, IDialer, DialOptions } from "@uniconn/core";
 export { TimeoutError, ConnectionClosedError, ListenerClosedError } from "@uniconn/core";
 export { secure } from "@uniconn/core";
+export { Node, DefaultNodeConfig } from "@uniconn/core";
+export type { NodeConfig } from "@uniconn/core";
 
 // Protocol adapters
 export * as tcp from "./tcp/index.js";

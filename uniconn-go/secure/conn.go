@@ -27,11 +27,14 @@ type SecureConn struct {
 
 	sendCounter uint64
 	sendMu      sync.Mutex
+	closeOnce   sync.Once
+	closeErr    error
 
 	// Receive buffering: DATA messages may carry more plaintext than
 	// the caller's Read buffer, so we buffer excess bytes.
-	recvBuf []byte
-	recvMu  sync.Mutex
+	recvBuf     []byte
+	recvMu      sync.Mutex
+	recvCounter uint64
 
 	// For net.Conn interface: delegate to inner if it's a net.Conn.
 	netConn net.Conn
@@ -66,9 +69,9 @@ func (sc *SecureConn) Write(p []byte) (int, error) {
 	}
 
 	sc.sendMu.Lock()
+	defer sc.sendMu.Unlock()
 	counter := sc.sendCounter
 	sc.sendCounter++
-	sc.sendMu.Unlock()
 
 	ts := uint32(time.Now().Unix())
 
@@ -86,14 +89,19 @@ func (sc *SecureConn) Write(p []byte) (int, error) {
 	ciphertext := aead.Seal(nil, nonce[:], p, nil)
 	frame := marshalData(ts, counter, ciphertext)
 
-	if _, err := sc.inner.Write(frame); err != nil {
+	if n, err := sc.inner.Write(frame); err != nil {
 		return 0, err
+	} else if n != len(frame) {
+		return 0, io.ErrShortWrite
 	}
 	return len(p), nil
 }
 
 // Read returns decrypted plaintext from the next DATA message.
 func (sc *SecureConn) Read(p []byte) (int, error) {
+	if len(p) == 0 {
+		return 0, nil
+	}
 	sc.recvMu.Lock()
 	defer sc.recvMu.Unlock()
 
@@ -147,6 +155,9 @@ func (sc *SecureConn) handleData(body, p []byte) (int, error) {
 
 	ts := binary.BigEndian.Uint32(body[1:5])
 	counter := binary.BigEndian.Uint64(body[5:13])
+	if counter != sc.recvCounter {
+		return 0, fmt.Errorf("unexpected DATA counter: got %d, want %d", counter, sc.recvCounter)
+	}
 	ciphertext := body[13:]
 
 	// Reconstruct nonce.
@@ -164,6 +175,7 @@ func (sc *SecureConn) handleData(body, p []byte) (int, error) {
 	if err != nil {
 		return 0, fmt.Errorf("decrypt: %w", err)
 	}
+	sc.recvCounter++
 
 	n := copy(p, plaintext)
 	if n < len(plaintext) {
@@ -174,17 +186,13 @@ func (sc *SecureConn) handleData(body, p []byte) (int, error) {
 
 // Close closes the underlying connection.
 func (sc *SecureConn) Close() error {
-	// Send error message to notify peer (best-effort).
-	errMsg := marshalError("closed")
-	sc.inner.Write(errMsg) //nolint: errcheck
-
-	if sc.netConn != nil {
-		return sc.netConn.Close()
-	}
-	if closer, ok := sc.inner.(io.Closer); ok {
-		return closer.Close()
-	}
-	return nil
+	// Closing must interrupt I/O even when the peer is not reading.
+	sc.closeOnce.Do(func() {
+		if closer, ok := sc.inner.(io.Closer); ok {
+			sc.closeErr = closer.Close()
+		}
+	})
+	return sc.closeErr
 }
 
 // PeerFingerprint returns the 64-byte BLAKE3 fingerprint of the authenticated peer.

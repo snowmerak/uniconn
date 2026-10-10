@@ -37,6 +37,7 @@ type MultiListener struct {
 	connCh    chan acceptResult
 	closeOnce sync.Once
 	done      chan struct{}
+	acceptWG  sync.WaitGroup
 }
 
 // NewMultiListener creates a multi-protocol listener.
@@ -63,6 +64,7 @@ func NewMultiListener(negotiateAddr string, transports ...TransportConfig) (*Mul
 
 	// Start accept goroutines for each transport.
 	for _, t := range transports {
+		ml.acceptWG.Add(1)
 		go ml.acceptLoop(t)
 	}
 
@@ -96,6 +98,7 @@ func (ml *MultiListener) NegotiateAddr() net.Addr {
 }
 
 func (ml *MultiListener) acceptLoop(t TransportConfig) {
+	defer ml.acceptWG.Done()
 	for {
 		conn, err := t.Listener.Accept()
 		select {
@@ -138,6 +141,14 @@ func (ml *MultiListener) AcceptWith() (net.Conn, Protocol, error) {
 	case <-ml.done:
 		return nil, "", net.ErrClosed
 	case r := <-ml.connCh:
+		select {
+		case <-ml.done:
+			if r.conn != nil {
+				r.conn.Close()
+			}
+			return nil, "", net.ErrClosed
+		default:
+		}
 		return r.conn, r.protocol, r.err
 	}
 }
@@ -157,6 +168,17 @@ func (ml *MultiListener) Close() error {
 		for _, t := range ml.transports {
 			if err := t.Listener.Close(); err != nil && firstErr == nil {
 				firstErr = err
+			}
+		}
+		ml.acceptWG.Wait()
+		for {
+			select {
+			case result := <-ml.connCh:
+				if result.conn != nil {
+					result.conn.Close()
+				}
+			default:
+				return
 			}
 		}
 	})

@@ -14,20 +14,22 @@ func TestP2PFederatedMesh(t *testing.T) {
 	// 1. Setup Relay 1 (Seed Node)
 	r1ID, _ := secure.GenerateIdentity()
 	r1Ln, _ := tcp.Listen("127.0.0.1:0", nil)
-	
+
 	r1Cfg := p2p.DefaultRelayConfig
 	r1Dialer := tcp.NewDialer(nil)
 	r1 := p2p.NewRelayServer(r1Cfg, r1Ln, r1Dialer, r1ID)
+	t.Cleanup(func() { r1.Close() })
 	go r1.Serve()
 
 	// 2. Setup Relay 2 (Joins Mesh via R1)
 	r2ID, _ := secure.GenerateIdentity()
 	r2Ln, _ := tcp.Listen("127.0.0.1:0", nil)
-	
+
 	r2Cfg := p2p.DefaultRelayConfig
 	r2Cfg.SeedRelays = []string{r1Ln.Addr().String()}
 	r2Dialer := tcp.NewDialer(nil)
 	r2 := p2p.NewRelayServer(r2Cfg, r2Ln, r2Dialer, r2ID)
+	t.Cleanup(func() { r2.Close() })
 	go r2.Serve()
 
 	// Wait briefly for R2 to gossip its join to R1
@@ -36,6 +38,7 @@ func TestP2PFederatedMesh(t *testing.T) {
 	// 3. Node B (Server) connects to Relay 2
 	idB, _ := secure.GenerateIdentity()
 	nodeB := p2p.NewNode(p2p.DefaultNodeConfig, idB, tcp.NewDialer(nil))
+	t.Cleanup(func() { nodeB.Close() })
 	if err := nodeB.ConnectRelay(context.Background(), r2Ln.Addr().String(), r2ID.Fingerprint()); err != nil {
 		t.Fatalf("Node B ConnectRelay failed: %v", err)
 	}
@@ -59,6 +62,7 @@ func TestP2PFederatedMesh(t *testing.T) {
 	// 4. Node A (Client) connects to Relay 1
 	idA, _ := secure.GenerateIdentity()
 	nodeA := p2p.NewNode(p2p.DefaultNodeConfig, idA, tcp.NewDialer(nil))
+	t.Cleanup(func() { nodeA.Close() })
 	if err := nodeA.ConnectRelay(context.Background(), r1Ln.Addr().String(), r1ID.Fingerprint()); err != nil {
 		t.Fatalf("Node A ConnectRelay failed: %v", err)
 	}

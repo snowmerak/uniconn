@@ -1,5 +1,5 @@
 import type { Addr, IConn } from "@uniconn/core";
-import { ConnectionClosedError, TimeoutError } from "@uniconn/core";
+import { ConnectionClosedError, TimeoutError, ReadQueue } from "@uniconn/core";
 
 /**
  * WebSocket IConn implementation.
@@ -12,11 +12,7 @@ export class WsConn implements IConn {
   private closed = false;
   private readDeadlineMs = 0;
   private writeDeadlineMs = 0;
-  private pendingData: Uint8Array[] = [];
-  private readResolve: ((value: number) => void) | null = null;
-  private readReject: ((reason: Error) => void) | null = null;
-  private readBuffer: Uint8Array | null = null;
-  private eofReached = false;
+  private reads = new ReadQueue();
   private localAddress: Addr;
   private remoteAddress: Addr;
 
@@ -29,90 +25,18 @@ export class WsConn implements IConn {
 
     ws.onmessage = (event: MessageEvent | { data: ArrayBuffer | Buffer }) => {
       const data = event.data;
-      let chunk: Uint8Array;
-      if (data instanceof ArrayBuffer) {
-        chunk = new Uint8Array(data);
-      } else if (Buffer.isBuffer(data)) {
-        chunk = new Uint8Array(data);
-      } else {
-        // Text message ??encode to bytes
-        chunk = new TextEncoder().encode(data as string);
-      }
-
-      if (this.readResolve && this.readBuffer) {
-        const n = Math.min(chunk.length, this.readBuffer.length);
-        this.readBuffer.set(chunk.subarray(0, n));
-        const resolve = this.readResolve;
-        this.readResolve = null;
-        this.readReject = null;
-        this.readBuffer = null;
-        if (n < chunk.length) {
-          this.pendingData.push(chunk.subarray(n));
-        }
-        resolve(n);
-      } else {
-        this.pendingData.push(chunk);
-      }
+      const chunk = data instanceof ArrayBuffer ? new Uint8Array(data)
+        : Buffer.isBuffer(data) ? new Uint8Array(data) : new TextEncoder().encode(data as string);
+      this.reads.push(chunk);
     };
-
-    ws.onclose = () => {
-      this.eofReached = true;
-      if (this.readResolve) {
-        const resolve = this.readResolve;
-        this.readResolve = null;
-        this.readReject = null;
-        this.readBuffer = null;
-        resolve(0);
-      }
-    };
-
-    ws.onerror = (err: Event | Error) => {
-      if (this.readReject) {
-        const reject = this.readReject;
-        this.readResolve = null;
-        this.readReject = null;
-        this.readBuffer = null;
-        reject(err instanceof Error ? err : new Error("websocket error"));
-      }
-    };
+    ws.onclose = () => this.reads.end();
+    ws.onerror = (error: Event | Error) => this.reads.fail(
+      error instanceof Error ? error : new Error("websocket error"));
   }
 
   async read(buffer: Uint8Array): Promise<number> {
     if (this.closed) throw new ConnectionClosedError();
-
-    if (this.pendingData.length > 0) {
-      const chunk = this.pendingData[0];
-      const n = Math.min(chunk.length, buffer.length);
-      buffer.set(chunk.subarray(0, n));
-      if (n < chunk.length) {
-        this.pendingData[0] = chunk.subarray(n);
-      } else {
-        this.pendingData.shift();
-      }
-      return n;
-    }
-
-    if (this.eofReached) return 0;
-
-    return new Promise<number>((resolve, reject) => {
-      this.readResolve = resolve;
-      this.readReject = reject;
-      this.readBuffer = buffer;
-
-      if (this.readDeadlineMs > 0) {
-        const timer = setTimeout(() => {
-          this.readResolve = null;
-          this.readReject = null;
-          this.readBuffer = null;
-          reject(new TimeoutError("read"));
-        }, this.readDeadlineMs);
-        const origResolve = resolve;
-        this.readResolve = (n: number) => {
-          clearTimeout(timer);
-          origResolve(n);
-        };
-      }
-    });
+    return this.reads.read(buffer, this.readDeadlineMs);
   }
 
   async write(data: Uint8Array): Promise<number> {
@@ -140,6 +64,7 @@ export class WsConn implements IConn {
   async close(): Promise<void> {
     if (this.closed) return;
     this.closed = true;
+    this.reads.fail(new ConnectionClosedError());
     this.ws.close(1000, "closed");
   }
 

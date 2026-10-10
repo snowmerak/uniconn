@@ -1,5 +1,10 @@
 {
   "private": true,
+  "scripts": {
+    "build": "node scripts/build.mjs",
+    "test": "npm test --workspace=node",
+    "test:integration": "npm run test:integration --workspace=node"
+  },
   "workspaces": [
     "core",
     "node",

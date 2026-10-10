@@ -160,9 +160,17 @@ class MultiListener:
         self._queue: asyncio.Queue[AcceptResult] = asyncio.Queue()
         self._closed = False
         self._tasks: list[asyncio.Task] = []
+        self._ended = asyncio.Event()
+        self._accept_error: Exception | None = None
+        self._active_loops = 0
 
     async def start(self) -> None:
         """Start accept loops for all transports."""
+        if self._closed:
+            raise RuntimeError("listener closed")
+        if self._tasks:
+            return
+        self._active_loops = len(self._transports)
         for t in self._transports:
             task = asyncio.create_task(self._accept_loop(t))
             self._tasks.append(task)
@@ -184,25 +192,58 @@ class MultiListener:
 
     async def accept_with(self) -> AcceptResult:
         """Accept the next connection along with its protocol."""
-        if self._closed:
-            raise RuntimeError("listener closed")
-        return await self._queue.get()
+        if self._ended.is_set():
+            raise self._accept_error or RuntimeError("listener closed")
+        incoming = asyncio.create_task(self._queue.get())
+        ended = asyncio.create_task(self._ended.wait())
+        try:
+            try:
+                await asyncio.wait([incoming, ended], return_when=asyncio.FIRST_COMPLETED)
+            finally:
+                incoming.cancel()
+                ended.cancel()
+                await asyncio.gather(incoming, ended, return_exceptions=True)
+            if self._ended.is_set():
+                raise self._accept_error or RuntimeError("listener closed")
+            return incoming.result()
+        except BaseException:
+            if incoming.done() and not incoming.cancelled():
+                await incoming.result().conn.close()
+            raise
 
     async def close(self) -> None:
         """Close all underlying listeners."""
+        if self._closed:
+            return
         self._closed = True
+        self._ended.set()
         for task in self._tasks:
             task.cancel()
-        for t in self._transports:
-            await t.listener.close()
+        await asyncio.gather(*self._tasks, return_exceptions=True)
+        connections = []
+        while not self._queue.empty():
+            connections.append(self._queue.get_nowait().conn)
+        results = await asyncio.gather(
+            *(t.listener.close() for t in self._transports),
+            *(conn.close() for conn in connections), return_exceptions=True)
+        for result in results:
+            if isinstance(result, Exception):
+                raise result
 
     async def _accept_loop(self, t: TransportConfig) -> None:
         while not self._closed:
             try:
                 conn = await t.listener.accept()
+                if self._closed:
+                    await conn.close()
+                    break
                 await self._queue.put(AcceptResult(conn=conn, protocol=t.protocol))
             except asyncio.CancelledError:
                 break
-            except Exception:
+            except Exception as error:
                 if not self._closed:
+                    self._active_loops -= 1
+                    if self._active_loops == 0:
+                        self._accept_error = error
+                        self._ended.set()
                     break

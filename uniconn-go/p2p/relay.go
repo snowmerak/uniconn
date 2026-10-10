@@ -49,11 +49,18 @@ type RelayServer struct {
 	knownRelays   map[string]struct{}
 	neighbors     map[string]*secure.SecureConn
 	globalRouting map[string]*globalPeerEntry
+	ctx           context.Context
+	cancel        context.CancelFunc
+	closeOnce     sync.Once
+	gossipOnce    sync.Once
+	connections   map[net.Conn]struct{}
 }
 
 // NewRelayServer initializes a new P2P RelayServer for the Federation mesh.
 func NewRelayServer(cfg RelayConfig, ln uniconn.Listener, dialer uniconn.Dialer, id *secure.Identity) *RelayServer {
+	ctx, cancel := context.WithCancel(context.Background())
 	return &RelayServer{
+		ctx: ctx, cancel: cancel, connections: make(map[net.Conn]struct{}),
 		config:          cfg,
 		listener:        ln,
 		dialer:          dialer,
@@ -82,26 +89,24 @@ func (r *RelayServer) Serve() error {
 
 func (r *RelayServer) handleIncoming(conn net.Conn) {
 	r.mu.Lock()
-	if r.config.MaxConnections > 0 && r.connsCount >= r.config.MaxConnections {
+	if r.ctx.Err() != nil || (r.config.MaxConnections > 0 && r.connsCount >= r.config.MaxConnections) {
 		r.mu.Unlock()
-		// Load shedding: Fast fail
-		msg, _ := json.Marshal(Envelope{Type: MsgError, Payload: []byte(`"Resource Exhausted"`)})
-		conn.Write(append(msg, '\n'))
 		conn.Close()
 		return
 	}
 	r.connsCount++
+	tracked := &relayConn{Conn: conn, relay: r}
+	r.connections[tracked] = struct{}{}
+	conn = tracked
 	r.mu.Unlock()
-
-	defer func() {
-		r.mu.Lock()
-		r.connsCount--
-		r.mu.Unlock()
-	}()
+	ctx, cancel := context.WithTimeout(r.ctx, setupTimeout(r.config.SetupTimeout))
+	defer cancel()
+	finish := guardSetup(ctx, conn)
 
 	// A public Relay accepts anonymous connections, thus zero/any Fingerprint.
 	secConn, err := secure.HandshakeResponder(conn, r.identity, secure.AnyFingerprint)
 	if err != nil {
+		finish()
 		log.Printf("[Relay] Handshake failed: %v\n", err)
 		conn.Close()
 		return
@@ -109,10 +114,13 @@ func (r *RelayServer) handleIncoming(conn net.Conn) {
 
 	fp := secConn.PeerFingerprint()
 	peerFP := hex.EncodeToString(fp[:])
-	
+
 	// We read the first message to know.
-	reader := bufio.NewReader(secConn)
-	line, err := reader.ReadBytes('\n')
+	reader := bufio.NewReaderSize(secConn, 64*1024)
+	line, err := reader.ReadSlice('\n')
+	if finishErr := finish(); finishErr != nil {
+		err = finishErr
+	}
 	if err != nil {
 		secConn.Close()
 		return
@@ -134,7 +142,7 @@ func (r *RelayServer) handleIncoming(conn net.Conn) {
 				controlConn:     secConn,
 				directAddresses: payload.DirectAddresses,
 			}
-			
+
 			// Update local routing table for Gossip
 			ts := time.Now().UnixNano()
 			r.globalRouting[peerFP] = &globalPeerEntry{
@@ -142,7 +150,7 @@ func (r *RelayServer) handleIncoming(conn net.Conn) {
 				timestamp: ts,
 			}
 			r.mu.Unlock()
-			
+
 			// Broadcast out to Mesh
 			r.BroadcastGossipUpdate(peerFP, r.listener.Addr().String(), ts)
 		}
@@ -155,7 +163,7 @@ func (r *RelayServer) handleIncoming(conn net.Conn) {
 		r.handleAcceptRelay(secConn, peerFP, env.Payload)
 	case MsgGetRelays, MsgRelaysList, MsgGossipUpdate:
 		// Incoming Relay-to-Relay Gossip/Control connection.
-		
+
 		// Ensure we record it as a neighbor for bi-directional broadcast
 		r.mu.Lock()
 		r.neighbors[secConn.RemoteAddr().String()] = secConn
@@ -186,7 +194,7 @@ func (r *RelayServer) controlLoop(conn *secure.SecureConn, fp string, reader *bu
 	}()
 
 	for {
-		line, err := reader.ReadBytes('\n')
+		line, err := reader.ReadSlice('\n')
 		if err != nil {
 			return
 		}
@@ -205,6 +213,48 @@ func (r *RelayServer) controlLoop(conn *secure.SecureConn, fp string, reader *bu
 			r.handleAnnounce(conn, fp, env.Payload)
 		}
 	}
+}
+
+// relayConn retains ownership when an ACCEPT_RELAY handler transfers its socket
+// to a proxy, so shutdown and connection limits still cover that socket.
+type relayConn struct {
+	net.Conn
+	relay *RelayServer
+	once  sync.Once
+	err   error
+}
+
+func (c *relayConn) Close() error {
+	c.once.Do(func() {
+		c.err = c.Conn.Close()
+		c.relay.mu.Lock()
+		delete(c.relay.connections, c)
+		c.relay.connsCount--
+		c.relay.mu.Unlock()
+	})
+	return c.err
+}
+
+// Close stops accepting, gossip maintenance and all relay-owned sockets.
+func (r *RelayServer) Close() error {
+	var err error
+	r.closeOnce.Do(func() {
+		r.cancel()
+		err = r.listener.Close()
+		r.mu.RLock()
+		conns := make([]net.Conn, 0, len(r.connections)+len(r.neighbors))
+		for conn := range r.connections {
+			conns = append(conns, conn)
+		}
+		for _, conn := range r.neighbors {
+			conns = append(conns, conn)
+		}
+		r.mu.RUnlock()
+		for _, conn := range conns {
+			conn.Close()
+		}
+	})
+	return err
 }
 
 func (r *RelayServer) handleAnnounce(conn *secure.SecureConn, fp string, payload []byte) {
@@ -252,6 +302,14 @@ func (r *RelayServer) handleRelayReq(conn *secure.SecureConn, requesterFP string
 	}
 
 	targetFP := req.TargetFingerprint
+	if err := validateFingerprint(targetFP); err != nil {
+		msg, _ := json.Marshal(Envelope{Type: MsgRelayAck, Payload: marshal(RelayAckPayload{
+			TargetFingerprint: targetFP, Success: false, Reason: err.Error(),
+		})})
+		conn.Write(append(msg, '\n'))
+		conn.Close()
+		return
+	}
 
 	// Generate session token
 	tk := make([]byte, 16)
@@ -261,7 +319,7 @@ func (r *RelayServer) handleRelayReq(conn *secure.SecureConn, requesterFP string
 	r.mu.RLock()
 	activeEntry, isActive := r.activeNodes[targetFP]
 	globalEntry, isGlobal := r.globalRouting[targetFP]
-	
+
 	log.Printf("[Relay] handleRelayReq Target: %s, isActive: %v, isGlobal: %v\n", targetFP[:8], isActive, isGlobal)
 
 	if !isActive {
@@ -273,7 +331,7 @@ func (r *RelayServer) handleRelayReq(conn *secure.SecureConn, requesterFP string
 
 		r.mu.RUnlock()
 		msg, _ := json.Marshal(Envelope{
-			Type: MsgRelayAck,
+			Type:    MsgRelayAck,
 			Payload: marshal(RelayAckPayload{TargetFingerprint: targetFP, Success: false, Reason: "peer offline"}),
 		})
 		conn.Write(append(msg, '\n'))
@@ -290,6 +348,19 @@ func (r *RelayServer) handleRelayReq(conn *secure.SecureConn, requesterFP string
 	r.mu.Lock()
 	r.pendingSessions[token] = sess
 	r.mu.Unlock()
+	defer func() {
+		r.mu.Lock()
+		delete(r.pendingSessions, token)
+		var late net.Conn
+		select {
+		case late = <-sess.waitCh:
+		default:
+		}
+		r.mu.Unlock()
+		if late != nil {
+			late.Close()
+		}
+	}()
 
 	// Notify target
 	inMsg := IncomingRelayPayload{
@@ -313,17 +384,15 @@ func (r *RelayServer) handleRelayReq(conn *secure.SecureConn, requesterFP string
 		// Tell target to go raw (no need here, target handles it on MsgAcceptRelay)
 
 		// Dumb Pipe! Pump data both ways.
-		go io.Copy(conn, targetConn)
-		io.Copy(targetConn, conn)
-
-		conn.Close()
-		targetConn.Close()
+		proxyConnections(conn, targetConn)
 
 	case <-time.After(10 * time.Second):
 		// Timeout
 		r.mu.Lock()
 		delete(r.pendingSessions, token)
 		r.mu.Unlock()
+		conn.Close()
+	case <-r.ctx.Done():
 		conn.Close()
 	}
 }
@@ -339,6 +408,9 @@ func (r *RelayServer) handleAcceptRelay(conn *secure.SecureConn, fp string, payl
 	sess, ok := r.pendingSessions[req.SessionToken]
 	if ok {
 		delete(r.pendingSessions, req.SessionToken)
+		// Publish while holding the session lock so timeout cleanup can drain
+		// a simultaneous accept instead of orphaning its socket.
+		sess.waitCh <- conn
 	}
 	r.mu.Unlock()
 
@@ -346,13 +418,14 @@ func (r *RelayServer) handleAcceptRelay(conn *secure.SecureConn, fp string, payl
 		conn.Close()
 		return
 	}
-	sess.waitCh <- conn
 	// connection transfers to the pipe in handleRelayReq...
 }
 
 func (r *RelayServer) handleRemoteRelayReq(requesterConn *secure.SecureConn, requesterFP, targetFP, remoteRelayAddr string) {
 	// Open physical pipeline to remote Relay (2-Hop segment)
-	conn, err := r.dialer.Dial(context.Background(), remoteRelayAddr)
+	ctx, cancel := context.WithTimeout(r.ctx, setupTimeout(r.config.SetupTimeout))
+	defer cancel()
+	conn, err := r.dialer.Dial(ctx, remoteRelayAddr)
 	if err != nil {
 		log.Printf("[Relay] handleRemoteRelayReq Dial failed: %v", err)
 		msg, _ := json.Marshal(Envelope{Type: MsgRelayAck, Payload: marshal(RelayAckPayload{TargetFingerprint: targetFP, Success: false, Reason: "remote relay unreachable"})})
@@ -361,6 +434,13 @@ func (r *RelayServer) handleRemoteRelayReq(requesterConn *secure.SecureConn, req
 		return
 	}
 	log.Printf("[Relay] handleRemoteRelayReq Dial %s succeeded", remoteRelayAddr)
+	finish := guardSetup(ctx, conn)
+	finished := false
+	defer func() {
+		if !finished {
+			finish()
+		}
+	}()
 
 	secConn, err := secure.HandshakeInitiator(conn, r.identity, secure.AnyFingerprint)
 	if err != nil {
@@ -407,17 +487,38 @@ func (r *RelayServer) handleRemoteRelayReq(requesterConn *secure.SecureConn, req
 	}
 
 	if env.Type == MsgRelayAck {
+		if err := finish(); err != nil {
+			conn.Close()
+			requesterConn.Close()
+			return
+		}
+		finished = true
 		// Forward RELAY_ACK to original requester.
 		rb, _ := json.Marshal(env)
 		requesterConn.Write(append(rb, '\n'))
 
 		// Pipe the connections!
-		go io.Copy(requesterConn, secConn)
-		io.Copy(secConn, requesterConn)
+		proxyConnections(requesterConn, secConn)
 	}
 
 	secConn.Close()
 	requesterConn.Close()
+}
+
+func proxyConnections(a, b net.Conn) {
+	var copies sync.WaitGroup
+	copies.Add(2)
+	pump := func(dst, src net.Conn) {
+		defer copies.Done()
+		io.Copy(dst, src)
+		// IConn has no half-close API. Either direction ending terminates
+		// the tunnel and interrupts the other direction's blocked read.
+		a.Close()
+		b.Close()
+	}
+	go pump(a, b)
+	pump(b, a)
+	copies.Wait()
 }
 
 func marshal(v interface{}) []byte {

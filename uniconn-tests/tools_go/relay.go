@@ -47,29 +47,29 @@ func main() {
 
 	// Build transports
 	var transports []multi.TransportConfig
-	
+
 	if *tcpAddr != "" {
 		ln, err := tcp.Listen(*tcpAddr, nil)
 		if err != nil {
 			log.Fatalf("tcp listen %s: %v", *tcpAddr, err)
 		}
-		transports = append(transports, multi.TransportConfig{Protocol: multi.ProtoTCP, Address: *tcpAddr, Listener: ln})
+		transports = append(transports, multi.TransportConfig{Protocol: multi.ProtoTCP, Address: ln.Addr().String(), Listener: ln})
 	}
-	
+
 	if *wsAddr != "" {
 		ln, err := websocket.Listen(*wsAddr, nil)
 		if err != nil {
 			log.Fatalf("ws listen %s: %v", *wsAddr, err)
 		}
-		transports = append(transports, multi.TransportConfig{Protocol: multi.ProtoWebSocket, Address: *wsAddr, Listener: ln})
+		transports = append(transports, multi.TransportConfig{Protocol: multi.ProtoWebSocket, Address: "ws://" + ln.Addr().String(), Listener: ln})
 	}
-	
+
 	if *kcpAddr != "" {
 		ln, err := kcp.Listen(*kcpAddr, nil)
 		if err != nil {
 			log.Fatalf("kcp listen %s: %v", *kcpAddr, err)
 		}
-		transports = append(transports, multi.TransportConfig{Protocol: multi.ProtoKCP, Address: *kcpAddr, Listener: ln})
+		transports = append(transports, multi.TransportConfig{Protocol: multi.ProtoKCP, Address: ln.Addr().String(), Listener: ln})
 	}
 
 	if len(transports) == 0 {
@@ -84,13 +84,16 @@ func main() {
 	rs := p2p.NewRelayServer(cfg, ml, dialer, id)
 
 	info := map[string]string{
-		"event": "started",
+		"event":       "started",
 		"fingerprint": fmt.Sprintf("%x", id.Fingerprint()),
+	}
+	info["negotiate"] = ml.NegotiateAddr().String()
+	for _, transport := range transports {
+		info[string(transport.Protocol)] = transport.Address
 	}
 	b, _ := json.Marshal(info)
 	fmt.Println(string(b))
 
-	rs.StartGossipLoop()
 	if err := rs.Serve(); err != nil {
 		log.Fatalf("serve: %v", err)
 	}

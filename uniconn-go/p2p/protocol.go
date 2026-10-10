@@ -1,10 +1,22 @@
 package p2p
 
 import (
+	"encoding/hex"
 	"encoding/json"
+	"fmt"
 
 	"github.com/snowmerak/uniconn/uniconn-go/multi"
 )
+
+func validateFingerprint(fp string) error {
+	if len(fp) != 128 {
+		return fmt.Errorf("fingerprint must contain 128 hexadecimal characters")
+	}
+	if _, err := hex.DecodeString(fp); err != nil {
+		return fmt.Errorf("invalid fingerprint: %w", err)
+	}
+	return nil
+}
 
 // MsgType identifies the type of the control message.s between a Node and a Relay Server.
 // All messages are sent over an already established SecureConn (E2EE), so
@@ -16,14 +28,14 @@ const (
 	// direct addresses (if allowed), and supported transport protocols.
 	MsgAnnounce MsgType = "ANNOUNCE"
 
-	// MsgFindPeer is sent by a Node to query the Relay for a target peer's 
+	// MsgFindPeer is sent by a Node to query the Relay for a target peer's
 	// direct contact info. If found, Relay replies with MsgFoundPeer.
 	MsgFindPeer MsgType = "FIND_PEER"
 
 	// MsgFoundPeer is sent by the Relay containing the target peer's info.
 	MsgFoundPeer MsgType = "FOUND_PEER"
 
-	// MsgRelayReq is sent by a Node to ask the Relay to act as a dumb-pipe 
+	// MsgRelayReq is sent by a Node to ask the Relay to act as a dumb-pipe
 	// proxy to another peer.
 	MsgRelayReq MsgType = "RELAY_REQ"
 
@@ -37,7 +49,7 @@ const (
 	MsgAcceptRelay MsgType = "ACCEPT_RELAY"
 
 	// MsgRelayAck is sent by Relay indicating the byte-level proxy is established.
-	// IMPORTANT: Following this message, the TCP/Stream connection switches to 
+	// IMPORTANT: Following this message, the TCP/Stream connection switches to
 	// Raw Byte forwarding.
 	MsgRelayAck MsgType = "RELAY_ACK"
 
@@ -67,7 +79,7 @@ type Envelope struct {
 type AnnouncePayload struct {
 	// Fingerprint is the sender Node's unique identity.
 	Fingerprint string `json:"fingerprint"`
-	
+
 	// SupportedProtocols lists the uniconn multi.Protocol supported by the Node listener.
 	SupportedProtocols []multi.Protocol `json:"supported_protocols,omitempty"`
 

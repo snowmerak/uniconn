@@ -1,124 +1,118 @@
-import asyncio
+"""Assert Go/Python/Node P2P interoperability with bounded, owned subprocesses."""
+from pathlib import Path
 import json
 import os
+import queue
 import subprocess
 import sys
+import tempfile
 import threading
+import time
 
-def parse_line(proc):
-    while True:
-        line = proc.stdout.readline()
-        if not line: return None
-        if line.startswith("{"):
+ROOT = Path(__file__).resolve().parents[2]
+
+class ManagedProcess:
+    def __init__(self, name, command, cwd=ROOT):
+        self.name = name
+        self.events = queue.Queue()
+        self.logs = []
+        self.process = subprocess.Popen(
+            [str(part) for part in command], cwd=cwd,
+            stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
+            text=True, encoding="utf-8", errors="replace",
+            creationflags=subprocess.CREATE_NO_WINDOW if os.name == "nt" else 0)
+        self.reader = threading.Thread(target=self._read, daemon=True)
+        self.reader.start()
+
+    def _read(self):
+        for line in self.process.stdout:
+            self.logs.append(line.rstrip())
+            self.logs = self.logs[-50:]
             try:
-                return json.loads(line)
-            except: pass
+                event = json.loads(line)
+                if isinstance(event, dict):
+                    self.events.put(event)
+            except (ValueError, TypeError):
+                pass
 
-def read_and_echo(proc, prefix, result_dict, log_file):
-    with open(log_file, "w") as f:
-        while True:
-            line = proc.stdout.readline()
-            if not line: break
-            f.write(line)
-            f.flush()
-            if line.startswith("{"):
-                try:
-                    data = json.loads(line)
-                    result_dict.update(data)
-                except:
-                    pass
+    def wait_event(self, kind, timeout=30, predicate=lambda event: True):
+        deadline = time.monotonic() + timeout
+        while time.monotonic() < deadline:
+            try:
+                event = self.events.get(timeout=min(0.1, max(0.001, deadline - time.monotonic())))
+                if event.get("event") == kind and predicate(event):
+                    return event
+            except queue.Empty:
+                if self.process.poll() is not None and not self.reader.is_alive():
+                    raise RuntimeError(f"{self.name} exited ({self.process.returncode}) before {kind}:\n" + "\n".join(self.logs))
+        raise TimeoutError(f"{self.name} did not report {kind} within {timeout}s:\n" + "\n".join(self.logs))
 
-async def main():
-    print("=== Starting Federation Mesh ===")
-    r1, r2, r3, py_node, go_node, ts_node = None, None, None, None, None, None
-    try:
-        # R1: TCP + WS
-        r1 = subprocess.Popen(["go", "run", "../uniconn-tests/tools_go/relay.go", "-tcp=127.0.0.1:10001", "-ws=127.0.0.1:10002", "-neg=127.0.0.1:19001"], stdout=subprocess.PIPE, text=True, cwd="../uniconn-go")
-        r1_info = {}
-        threading.Thread(target=read_and_echo, args=(r1, "R1", r1_info, "r1.log"), daemon=True).start()
-        await asyncio.sleep(0.5)
+    def send(self, line):
+        self.process.stdin.write(line + "\n")
+        self.process.stdin.flush()
 
-        # R2: TCP + KCP, seeds=R1 (19001)
-        r2 = subprocess.Popen(["go", "run", "../uniconn-tests/tools_go/relay.go", "-tcp=127.0.0.1:10011", "-kcp=127.0.0.1:10012", "-neg=127.0.0.1:19002", "-seeds=127.0.0.1:19001"], stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, cwd="../uniconn-go")
-        r2_info = {}
-        threading.Thread(target=read_and_echo, args=(r2, "R2", r2_info, "r2.log"), daemon=True).start()
-        await asyncio.sleep(0.5)
+    def close(self):
+        if self.process.poll() is None:
+            self.process.terminate()
+        try:
+            self.process.wait(timeout=5)
+        except subprocess.TimeoutExpired:
+            self.process.kill()
+            self.process.wait(timeout=5)
+        self.reader.join(timeout=1)
+        if not self.process.stdin.closed:
+            self.process.stdin.close()
+        self.process.stdout.close()
 
-        # R3: TCP, seeds=R2 (19002)
-        r3 = subprocess.Popen(["go", "run", "../uniconn-tests/tools_go/relay.go", "-tcp=127.0.0.1:10021", "-neg=127.0.0.1:19003", "-seeds=127.0.0.1:19002"], stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, cwd="../uniconn-go")
-        r3_info = {}
-        threading.Thread(target=read_and_echo, args=(r3, "R3", r3_info, "r3.log"), daemon=True).start()
-        await asyncio.sleep(0.5)
 
-        await asyncio.sleep(1) # Let mesh stabilize
-        print("\n=== Connecting Clients ===")
+def assert_message(event, expected):
+    if event.get("event") != "msg_received" or event.get("data") != expected:
+        raise AssertionError(f"expected {expected!r}, got {event!r}")
 
-        # 1. Python Client (Responder, Connected to R3 TCP)
-        uv_cmd = "uv.exe" if os.name == "nt" else "uv"
-        py_node = subprocess.Popen([uv_cmd, "run", "python", "../uniconn-tests/tools_py/py_client.py", "--relay", "127.0.0.1:10021", "--relay-fp", r3_info['fingerprint'], "--role", "responder"], stdout=subprocess.PIPE, stdin=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, cwd="../uniconn-py")
-        py_info = {}
-        threading.Thread(target=read_and_echo, args=(py_node, "PY", py_info, "py.log"), daemon=True).start()
-        await asyncio.sleep(0.5)
-        py_fp = py_info.get('fingerprint', '')
-        print(f"[Py Client] Connected to R3. fp={py_fp}")
 
-        # 2. Go Client (Responder, Connected to R2 KCP)
-        go_node = subprocess.Popen(["go", "run", "../uniconn-tests/tools_go/go_client.go", "--relay", "127.0.0.1:10012", "--relay-fp", r2_info['fingerprint'], "--proto", "kcp", "--role", "responder"], stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, cwd="../uniconn-go")
-        go_info = {}
-        threading.Thread(target=read_and_echo, args=(go_node, "GO", go_info, "go.log"), daemon=True).start()
-        # Wait until we have go_fp
-        while not go_info.get('fingerprint'):
-            await asyncio.sleep(0.1)
-        go_fp = go_info['fingerprint']
-        print(f"[Go Client] Connected to R2 (KCP). fp={go_fp}")
+def main():
+    processes = []
+    def start(name, command):
+        process = ManagedProcess(name, command)
+        processes.append(process)
+        return process
 
-        # 3. TS Client (Initiator targeting Py & Go, Connected to R1 TCP)
-        npx_cmd = "npx.cmd" if os.name == "nt" else "npx"
-        ts_node = subprocess.Popen([npx_cmd, "tsx", "../uniconn-tests/tools_ts/ts_client.ts", "--relay", "127.0.0.1:10001", "--relay-fp", r1_info['fingerprint'], "--role", "initiator"], stdout=subprocess.PIPE, stdin=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, cwd="../uniconn-tests")
-        ts_info = {}
-        threading.Thread(target=read_and_echo, args=(ts_node, "TS", ts_info, "ts.log"), daemon=True).start()
-        # Wait until we have ts_fp
-        while not ts_info.get('fingerprint'):
-            await asyncio.sleep(0.1)
-        ts_fp = ts_info['fingerprint']
-        print(f"[TS Client] Connected to R1 (TCP). fp={ts_fp}")
+    with tempfile.TemporaryDirectory(prefix="uniconn-cross-") as temporary:
+        temporary = Path(temporary)
+        suffix = ".exe" if os.name == "nt" else ""
+        relay_exe = temporary / ("relay" + suffix)
+        client_exe = temporary / ("go-client" + suffix)
+        subprocess.run(["node", ROOT / "uniconn-js/scripts/build.mjs", "core", "node"], check=True, timeout=60)
+        for source, output in [("relay.go", relay_exe), ("go_client.go", client_exe)]:
+            subprocess.run(["go", "build", "-o", output, ROOT / "uniconn-tests/tools_go" / source],
+                           cwd=ROOT / "uniconn-go", check=True, timeout=60)
+        try:
+            r1 = start("R1", [relay_exe, "-tcp=127.0.0.1:0", "-neg=127.0.0.1:0"])
+            i1 = r1.wait_event("started")
+            r2 = start("R2", [relay_exe, "-tcp=127.0.0.1:0", "-kcp=127.0.0.1:0", "-neg=127.0.0.1:0", f"-seeds={i1['negotiate']}"])
+            i2 = r2.wait_event("started")
+            r3 = start("R3", [relay_exe, "-tcp=127.0.0.1:0", "-neg=127.0.0.1:0", f"-seeds={i2['negotiate']}"])
+            i3 = r3.wait_event("started")
+            py = start("Python", [sys.executable, ROOT / "uniconn-tests/tools_py/py_client.py", "--relay", i3["tcp"], "--relay-fp", i3["fingerprint"], "--role", "responder", "--wait-ack"])
+            py_info = py.wait_event("connected")
+            go = start("Go", [client_exe, "--relay", i2["kcp"], "--relay-fp", i2["fingerprint"], "--proto", "kcp", "--role", "responder", "--wait-ack"])
+            go_info = go.wait_event("connected")
+            js = start("Node", ["node", ROOT / "uniconn-tests/tools_ts/p2p_client.mjs", "--relay", i1["tcp"], "--relay-fp", i1["fingerprint"]])
+            js.wait_event("connected")
+            for peer, info, response in [(py, py_info, "PONG_FROM_PY"), (go, go_info, "PONG_FROM_GO")]:
+                js.send(info["fingerprint"])
+                assert_message(peer.wait_event("msg_received"), "PING_FROM_TS")
+                assert_message(js.wait_event("msg_received", predicate=lambda event: event.get("target_fingerprint") == info["fingerprint"]), response)
+                if peer.process.wait(timeout=10) != 0:
+                    raise RuntimeError(f"{peer.name} failed during receipt verification")
+                print(f"PASS Node -> {peer.name}: authenticated mesh tunnel and exact echo")
+            js.process.stdin.close()
+            if js.process.wait(timeout=10) != 0:
+                raise RuntimeError("Node client failed after data exchange")
+        finally:
+            for process in reversed(processes):
+                process.close()
 
-        await asyncio.sleep(1) # Wait for Gossip to propagate
-
-        print("\n=== Executing Cross-Language E2EE Tunneling ===")
-        
-        # TS -> Python
-        print(f"> Instructing TS Client to dial Py ({py_fp[:8]}...)")
-        ts_node.stdin.write(py_fp + "\n")
-        ts_node.stdin.flush()
-
-        await asyncio.sleep(5)
-        if "msg_received" in str(py_info):
-            print("✅ TS -> Py 2-Hop TCP E2EE Success!")
-        if "msg_received" in str(ts_info):
-            print("✅ Py -> TS PONG Success!")
-
-        print("\n=== Web Browser Test Instruction ===")
-        print("To test browser interactions:")
-        print(" 1. Run in a new terminal: cd web && npm run dev")
-        print(" 2. Open the URL shown (e.g., http://localhost:5173)")
-        print(f" 3. Ensure 'ws://127.0.0.1:10002' mapping to R1 is in the Address field.")
-        print(f" 4. For Target FP, use Go Client: {go_fp}")
-        print(" 5. Dial Peer ! You should see PONG_FROM_GO.\n")
-
-        # Automatically wait 4 seconds then quit instead of requiring input
-        await asyncio.sleep(4)
-        print("Test complete, exiting and cleaning up...")
-    finally:
-        if r1: r1.kill()
-        if r2: r2.kill()
-        if r3: r3.kill()
-        if py_node: py_node.kill()
-        if go_node: go_node.kill()
-        if ts_node: ts_node.kill()
-        if os.name == "nt":
-            subprocess.run(["taskkill", "/f", "/im", "relay.exe"], capture_output=True)
-            subprocess.run(["taskkill", "/f", "/im", "go_client.exe"], capture_output=True)
 
 if __name__ == "__main__":
-    asyncio.run(main())
+    main()

@@ -5,9 +5,19 @@
   "main": "dist/index.js",
   "types": "dist/index.d.ts",
   "type": "module",
+  "exports": {
+    ".": "./dist/index.js",
+    "./p2p": "./dist/p2p.js",
+    "./secure/identity": "./dist/secure/identity.js",
+    "./tcp/dialer": "./dist/tcp/dialer.js",
+    "./*": "./*"
+  },
   "scripts": {
     "build": "tsc",
-    "test": "node --test dist/**/*.test.js"
+    "pretest": "node ../scripts/build.mjs core node",
+    "test": "node --test dist/multi/*.test.js dist/secure/*.test.js dist/test/secure*.test.js dist/test/p2p*.test.js dist/test/transport*.test.js",
+    "pretest:integration": "node ../scripts/build.mjs core node",
+    "test:integration": "node --test dist/test/cross.test.js dist/test/integration.test.js"
   },
   "license": "MIT",
   "dependencies": {

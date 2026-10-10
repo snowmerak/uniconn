@@ -64,13 +64,8 @@ func (c *Conn) Write(b []byte) (int, error) {
 	return len(b), nil
 }
 
-// Close sends a close message and closes the underlying connection.
+// Close interrupts I/O without waiting for a peer to consume a close frame.
 func (c *Conn) Close() error {
-	// Send close message (best-effort)
-	_ = c.conn.WriteMessage(
-		ws.CloseMessage,
-		ws.FormatCloseMessage(ws.CloseNormalClosure, ""),
-	)
 	return c.conn.Close()
 }
 

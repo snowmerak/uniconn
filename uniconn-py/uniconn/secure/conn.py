@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import struct
 import time
+import asyncio
 
 from Crypto.Cipher import ChaCha20_Poly1305  # pycryptodome
 
@@ -16,7 +17,7 @@ from .constants import (
     TIMESTAMP_SIZE,
     COUNTER_SIZE,
 )
-from .message import read_frame_from_conn, write_frame_to_conn, marshal_data, marshal_error
+from .message import read_frame_from_conn, write_frame_to_conn, marshal_data
 
 
 class SecureConn(Conn):
@@ -37,6 +38,10 @@ class SecureConn(Conn):
             self._recv_pfx = keys.initiator_nonce_pfx
 
         self._send_counter: int = 0
+        self._recv_counter: int = 0
+        self._read_lock = asyncio.Lock()
+        self._write_lock = asyncio.Lock()
+        self._closed = False
         self._recv_buf = bytearray()
         self._inner_conn: Conn | None = None
 
@@ -46,6 +51,14 @@ class SecureConn(Conn):
         return self
 
     async def read(self, buf: bytearray) -> int:
+        async with self._read_lock:
+            if self._closed:
+                raise ConnectionError("connection closed")
+            if not buf:
+                return 0
+            return await self._read(buf)
+
+    async def _read(self, buf: bytearray) -> int:
         assert self._inner_conn is not None
 
         if self._recv_buf:
@@ -78,6 +91,8 @@ class SecureConn(Conn):
 
         ts = struct.unpack("!I", body[1:5])[0]
         counter = struct.unpack("!Q", body[5:13])[0]
+        if counter != self._recv_counter:
+            raise ValueError("unexpected DATA counter")
         ciphertext = body[13:]
 
         nonce = bytearray(NONCE_SIZE)
@@ -92,6 +107,7 @@ class SecureConn(Conn):
             )
         except ValueError:
             raise ValueError("AEAD decrypt failed: tag mismatch")
+        self._recv_counter += 1
 
         n = min(len(buf), len(plaintext))
         buf[:n] = plaintext[:n]
@@ -100,6 +116,12 @@ class SecureConn(Conn):
         return n
 
     async def write(self, data: bytes) -> int:
+        async with self._write_lock:
+            if self._closed:
+                raise ConnectionError("connection closed")
+            return await self._write(data)
+
+    async def _write(self, data: bytes) -> int:
         assert self._inner_conn is not None
 
         if not data:
@@ -123,12 +145,8 @@ class SecureConn(Conn):
         return len(data)
 
     async def close(self) -> None:
-        if self._inner_conn is not None:
-            try:
-                err_body = marshal_error("closed")
-                await write_frame_to_conn(self._inner_conn, err_body)
-            except Exception:
-                pass
+        if not self._closed and self._inner_conn is not None:
+            self._closed = True
             await self._inner_conn.close()
 
     def local_addr(self) -> Addr | None:

@@ -7,9 +7,11 @@ import (
 	"encoding/json"
 	"flag"
 	"fmt"
+	"io"
 	"log"
 	"os"
 	"strings"
+	"time"
 
 	uniconn "github.com/snowmerak/uniconn/uniconn-go"
 	"github.com/snowmerak/uniconn/uniconn-go/kcp"
@@ -24,6 +26,7 @@ func main() {
 	relayFP := flag.String("relay-fp", "", "Hex relay fingerprint (or empty for Any)")
 	proto := flag.String("proto", "tcp", "Protocol to dial (tcp, ws, kcp)")
 	role := flag.String("role", "responder", "Target role: initiator or responder")
+	waitAck := flag.Bool("wait-ack", false, "Wait for application receipt before exiting")
 	flag.Parse()
 
 	var dialer uniconn.Dialer
@@ -40,6 +43,7 @@ func main() {
 
 	id, _ := secure.GenerateIdentity()
 	node := p2p.NewNode(p2p.DefaultNodeConfig, id, dialer)
+	defer node.Close()
 
 	fpBytes := secure.AnyFingerprint
 	if *relayFP != "" {
@@ -52,7 +56,7 @@ func main() {
 	}
 
 	info := map[string]string{
-		"event": "connected",
+		"event":       "connected",
 		"fingerprint": fmt.Sprintf("%x", id.Fingerprint()),
 	}
 	b, _ := json.Marshal(info)
@@ -60,12 +64,23 @@ func main() {
 
 	if *role == "responder" {
 		conn, err := node.Accept()
-		if err != nil { log.Fatalf("accept failed: %v", err) }
+		if err != nil {
+			log.Fatalf("accept failed: %v", err)
+		}
 		defer conn.Close()
 		buf := make([]byte, 1024)
 		n, _ := conn.Read(buf)
 		fmt.Printf(`{"event":"msg_received","data":"%s"}`+"\n", string(buf[:n]))
-		conn.Write([]byte("PONG_FROM_GO"))
+		if _, err := conn.Write([]byte("PONG_FROM_GO")); err != nil {
+			log.Fatalf("write response: %v", err)
+		}
+		if *waitAck {
+			conn.SetReadDeadline(time.Now().Add(5 * time.Second))
+			ack := make([]byte, len("RECEIVED"))
+			if _, err := io.ReadFull(conn, ack); err != nil || string(ack) != "RECEIVED" {
+				log.Fatalf("receipt: %q, %v", ack, err)
+			}
+		}
 	} else {
 		rd := bufio.NewReader(os.Stdin)
 		targetHex, _ := rd.ReadString('\n')
@@ -76,7 +91,9 @@ func main() {
 		copy(targetBytes[:], tb)
 
 		conn, err := node.DialPeer(context.Background(), targetBytes)
-		if err != nil { log.Fatalf("dial peer failed: %v", err) }
+		if err != nil {
+			log.Fatalf("dial peer failed: %v", err)
+		}
 		defer conn.Close()
 		conn.Write([]byte("PING_FROM_GO"))
 		buf := make([]byte, 1024)

@@ -18,6 +18,7 @@ async def main():
     parser.add_argument("--relay-fp", default="")
     parser.add_argument("--proto", default="tcp")
     parser.add_argument("--role", default="responder")
+    parser.add_argument("--wait-ack", action="store_true")
     args = parser.parse_args()
 
     if args.proto == "ws":
@@ -51,6 +52,17 @@ async def main():
         print(json.dumps({"event": "msg_received", "data": msg}))
         sys.stdout.flush()
         await conn.write(b"PONG_FROM_PY")
+        if args.wait_ack:
+            receipt = bytearray()
+            async with asyncio.timeout(5):
+                while len(receipt) < len(b"RECEIVED"):
+                    chunk = bytearray(len(b"RECEIVED") - len(receipt))
+                    n = await conn.read(chunk)
+                    if not n:
+                        raise ConnectionError("EOF before receipt")
+                    receipt.extend(chunk[:n])
+            if receipt != b"RECEIVED":
+                raise ValueError(f"wrong receipt: {receipt!r}")
     else:
         loop = asyncio.get_event_loop()
         target_hex = await loop.run_in_executor(None, sys.stdin.readline)

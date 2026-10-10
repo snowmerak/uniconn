@@ -15,13 +15,15 @@ import (
 
 // StartGossipLoop kicks off the background mechanisms for peering and syncing.
 func (r *RelayServer) StartGossipLoop() {
-	r.mu.Lock()
-	for _, seed := range r.config.SeedRelays {
-		r.knownRelays[seed] = struct{}{}
-	}
-	r.mu.Unlock()
+	r.gossipOnce.Do(func() {
+		r.mu.Lock()
+		for _, seed := range r.config.SeedRelays {
+			r.knownRelays[seed] = struct{}{}
+		}
+		r.mu.Unlock()
 
-	go r.maintainNeighbors()
+		go r.maintainNeighbors()
+	})
 }
 
 func (r *RelayServer) maintainNeighbors() {
@@ -31,8 +33,13 @@ func (r *RelayServer) maintainNeighbors() {
 	// Initial bootstrap
 	r.reconnectNeighbors()
 
-	for range ticker.C {
-		r.reconnectNeighbors()
+	for {
+		select {
+		case <-r.ctx.Done():
+			return
+		case <-ticker.C:
+			r.reconnectNeighbors()
+		}
 	}
 }
 
@@ -40,7 +47,7 @@ func (r *RelayServer) reconnectNeighbors() {
 	r.mu.RLock()
 	activeCount := len(r.neighbors)
 	maxNeighbors := r.config.MaxNeighbors
-	
+
 	if maxNeighbors <= 0 || activeCount >= maxNeighbors {
 		r.mu.RUnlock()
 		return
@@ -67,32 +74,50 @@ func (r *RelayServer) reconnectNeighbors() {
 }
 
 func (r *RelayServer) connectToNeighbor(addr string) {
-	conn, err := r.dialer.Dial(context.Background(), addr)
+	ctx, cancel := context.WithTimeout(r.ctx, setupTimeout(r.config.SetupTimeout))
+	defer cancel()
+	conn, err := r.dialer.Dial(ctx, addr)
 	if err != nil {
 		log.Printf("[Gossip] Dial to %s failed: %v", addr, err)
 		return
 	}
 	log.Printf("[Gossip] Dial to %s succeeded", addr)
+	finish := guardSetup(ctx, conn)
 
 	secConn, err := secure.HandshakeInitiator(conn, r.identity, secure.AnyFingerprint)
 	if err != nil {
+		finish()
 		log.Printf("[Gossip] Handshake to %s failed: %v", addr, err)
 		conn.Close()
 		return
 	}
 	log.Printf("[Gossip] Handshake to %s succeeded", addr)
 
-	r.mu.Lock()
-	r.neighbors[addr] = secConn
-	r.mu.Unlock()
-
 	// Request Relays List
 	getRelaysMsg := Envelope{Type: MsgGetRelays, Payload: marshal(GetRelaysPayload{})}
 	b, _ := json.Marshal(getRelaysMsg)
-	secConn.Write(append(b, '\n'))
+	_, writeErr := secConn.Write(append(b, '\n'))
+	finishErr := finish()
+	if writeErr != nil || finishErr != nil {
+		secConn.Close()
+		return
+	}
+	r.mu.Lock()
+	if r.ctx.Err() != nil {
+		r.mu.Unlock()
+		secConn.Close()
+		return
+	}
+	if old := r.neighbors[addr]; old != nil {
+		r.mu.Unlock()
+		secConn.Close()
+		return
+	}
+	r.neighbors[addr] = secConn
+	r.mu.Unlock()
 
 	// Handle incoming gossip/control on this neighbor connection
-	reader := bufio.NewReader(secConn)
+	reader := bufio.NewReaderSize(secConn, 64*1024)
 	go r.handleNeighborConn(addr, secConn, reader)
 }
 
@@ -100,12 +125,14 @@ func (r *RelayServer) handleNeighborConn(addr string, secConn *secure.SecureConn
 	defer func() {
 		secConn.Close()
 		r.mu.Lock()
-		delete(r.neighbors, addr)
+		if r.neighbors[addr] == secConn {
+			delete(r.neighbors, addr)
+		}
 		r.mu.Unlock()
 	}()
 
 	for {
-		line, err := reader.ReadBytes('\n')
+		line, err := reader.ReadSlice('\n')
 		if err != nil {
 			if err != io.EOF && !strings.Contains(err.Error(), "closed network connection") {
 				log.Printf("[Gossip] Read error from %s: %v", addr, err)
@@ -117,7 +144,7 @@ func (r *RelayServer) handleNeighborConn(addr string, secConn *secure.SecureConn
 			log.Printf("[Gossip] JSON unmarshal error from %s: %v. Line: %s", addr, err, line)
 			return
 		}
-		
+
 		r.processGossipMessage(addr, env, secConn)
 	}
 }
@@ -134,7 +161,7 @@ func (r *RelayServer) BroadcastGossipUpdate(fp string, addr string, ts int64) {
 
 	r.mu.RLock()
 	defer r.mu.RUnlock()
-	
+
 	for _, neighbor := range r.neighbors {
 		// Non-blocking best-effort broadcast to neighbors
 		go func(conn *secure.SecureConn) {
@@ -152,7 +179,7 @@ func (r *RelayServer) processGossipMessage(senderAddr string, env Envelope, secC
 			list = append(list, addr)
 		}
 		r.mu.RUnlock()
-		
+
 		resp := Envelope{
 			Type:    MsgRelaysList,
 			Payload: marshal(RelaysListPayload{RelayAddresses: list}),
@@ -173,6 +200,9 @@ func (r *RelayServer) processGossipMessage(senderAddr string, env Envelope, secC
 	case MsgGossipUpdate:
 		var payload GossipUpdatePayload
 		if err := json.Unmarshal(env.Payload, &payload); err == nil {
+			if validateFingerprint(payload.Fingerprint) != nil {
+				return
+			}
 			r.mu.Lock()
 			entry, exists := r.globalRouting[payload.Fingerprint]
 			if !exists || entry.timestamp < payload.Timestamp {
@@ -192,6 +222,10 @@ func (r *RelayServer) processGossipMessage(senderAddr string, env Envelope, secC
 		// Handling incoming 2-Hop proxy request from another relay
 		var payload RelayInternalReqPayload
 		if err := json.Unmarshal(env.Payload, &payload); err == nil {
+			if validateFingerprint(payload.SourceFingerprint) != nil {
+				secConn.Close()
+				return
+			}
 			r.handleRelayReq(secConn, payload.SourceFingerprint, env.Payload)
 		}
 	}

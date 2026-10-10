@@ -16,14 +16,19 @@ tasks:
     cmds:
       - cd uniconn-go && go test ./...
       - cd uniconn-py && uv run pytest
-      - cd uniconn-js/core && npm test --if-present
-      - cd uniconn-js/node && npm test --if-present
+      - npm --prefix uniconn-js test
+      - cd uniconn-tests && uv run --project ../uniconn-py python -m pytest runners/test_p2p_harness.py
 
   test:cross:
     desc: "Run cross-runtime (Go, Python, TypeScript) mesh integration tests"
     dir: uniconn-tests
     cmds:
-      - uv run python runners/run_p2p_cross.py
+      - uv run --project ../uniconn-py python runners/run_p2p_cross.py
+
+  test:transport-cross:
+    desc: "Run Node-to-Go transport integration tests (requires native KCP binding)"
+    cmds:
+      - npm --prefix uniconn-js run test:integration
 
   test:web:
     desc: "Run headless Playwright browser E2E test"
@@ -54,5 +59,5 @@ tasks:
     desc: "Build binaries and Node packages"
     cmds:
       - cd uniconn-go && go build ./...
-      - cd uniconn-js/web && npm run build
+      - npm --prefix uniconn-js run build
       - cd uniconn-py && uv build

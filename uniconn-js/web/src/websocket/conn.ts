@@ -1,3 +1,4 @@
+import { ReadQueue, ConnectionClosedError } from "@uniconn/core";
 import type { Addr, IConn } from "@uniconn/core";
 
 /**
@@ -9,11 +10,8 @@ import type { Addr, IConn } from "@uniconn/core";
 export class WebSocketConn implements IConn {
   private ws: WebSocket;
   private closed = false;
-  private pendingData: Uint8Array[] = [];
-  private readResolve: ((value: number) => void) | null = null;
-  private readReject: ((reason: Error) => void) | null = null;
-  private readBuffer: Uint8Array | null = null;
-  private eofReached = false;
+  private reads = new ReadQueue();
+  private readDeadlineMs = 0;
   private url: string;
 
   constructor(ws: WebSocket) {
@@ -22,44 +20,10 @@ export class WebSocketConn implements IConn {
     ws.binaryType = "arraybuffer";
 
     ws.addEventListener("message", (ev: MessageEvent) => {
-      const data = new Uint8Array(ev.data as ArrayBuffer);
-      if (this.readResolve && this.readBuffer) {
-        const n = Math.min(data.length, this.readBuffer.length);
-        this.readBuffer.set(data.subarray(0, n));
-        const resolve = this.readResolve;
-        this.readResolve = null;
-        this.readReject = null;
-        this.readBuffer = null;
-        if (n < data.length) {
-          this.pendingData.push(data.subarray(n));
-        }
-        resolve(n);
-      } else {
-        this.pendingData.push(data);
-      }
+      this.reads.push(new Uint8Array(ev.data as ArrayBuffer));
     });
-
-    ws.addEventListener("close", () => {
-      this.eofReached = true;
-      if (this.readResolve) {
-        const resolve = this.readResolve;
-        this.readResolve = null;
-        this.readReject = null;
-        this.readBuffer = null;
-        resolve(0);
-      }
-    });
-
-    ws.addEventListener("error", () => {
-      const err = new Error("WebSocket error");
-      if (this.readReject) {
-        const reject = this.readReject;
-        this.readResolve = null;
-        this.readReject = null;
-        this.readBuffer = null;
-        reject(err);
-      }
-    });
+    ws.addEventListener("close", () => this.reads.end());
+    ws.addEventListener("error", () => this.reads.fail(new Error("WebSocket error")));
   }
 
   /** Wait for the WebSocket to be open. */
@@ -73,27 +37,8 @@ export class WebSocketConn implements IConn {
   }
 
   async read(buffer: Uint8Array): Promise<number> {
-    if (this.closed) throw new Error("connection closed");
-
-    if (this.pendingData.length > 0) {
-      const chunk = this.pendingData[0];
-      const n = Math.min(chunk.length, buffer.length);
-      buffer.set(chunk.subarray(0, n));
-      if (n < chunk.length) {
-        this.pendingData[0] = chunk.subarray(n);
-      } else {
-        this.pendingData.shift();
-      }
-      return n;
-    }
-
-    if (this.eofReached) return 0;
-
-    return new Promise<number>((resolve, reject) => {
-      this.readResolve = resolve;
-      this.readReject = reject;
-      this.readBuffer = buffer;
-    });
+    if (this.closed) throw new ConnectionClosedError();
+    return this.reads.read(buffer, this.readDeadlineMs);
   }
 
   async write(data: Uint8Array): Promise<number> {
@@ -105,6 +50,7 @@ export class WebSocketConn implements IConn {
   async close(): Promise<void> {
     if (this.closed) return;
     this.closed = true;
+    this.reads.fail(new ConnectionClosedError());
     this.ws.close();
   }
 
@@ -116,7 +62,7 @@ export class WebSocketConn implements IConn {
     return { network: "websocket", address: this.url };
   }
 
-  setDeadline(_ms: number): void {}
-  setReadDeadline(_ms: number): void {}
+  setDeadline(ms: number): void { this.readDeadlineMs = ms; }
+  setReadDeadline(ms: number): void { this.readDeadlineMs = ms; }
   setWriteDeadline(_ms: number): void {}
 }

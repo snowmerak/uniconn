@@ -1,9 +1,15 @@
 package p2p
 
-import "github.com/snowmerak/uniconn/uniconn-go/multi"
+import (
+	"github.com/snowmerak/uniconn/uniconn-go/multi"
+	"time"
+)
 
 // NodeConfig defines the settings for a P2P node.
 type NodeConfig struct {
+	// SetupTimeout bounds dialing, relay acknowledgement and both handshakes.
+	// Zero uses ten seconds.
+	SetupTimeout time.Duration
 	// AllowDirectConnection specifies whether the node is allowed to attempt
 	// direct connections (Hole Punching) to other peers. If false, all
 	// traffic will be routed through the Relay servers, preserving IP anonymity.
@@ -22,6 +28,8 @@ var DefaultNodeConfig = NodeConfig{
 
 // RelayConfig defines the settings for a P2P Relay server.
 type RelayConfig struct {
+	// SetupTimeout bounds handshakes and initial control messages. Zero uses ten seconds.
+	SetupTimeout time.Duration
 	// MaxConnections enforces the top-level FD limit for all inbound/outbound relay streams.
 	MaxConnections int
 

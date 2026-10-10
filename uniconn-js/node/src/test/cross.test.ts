@@ -42,7 +42,7 @@ function bytesToHex(bytes: Uint8Array): string {
 function goDir(): string {
   const thisDir = path.dirname(fileURLToPath(import.meta.url));
   // dist/test/ ??project root ??../uniconn-go
-  return path.resolve(thisDir, "..", "..", "..", "uniconn-go");
+  return path.resolve(thisDir, "..", "..", "..", "..", "uniconn-go");
 }
 
 describe("USCP E2EE Cross-Platform (Node ??Go)", () => {
